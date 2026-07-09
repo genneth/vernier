@@ -1,0 +1,47 @@
+app-id: io.github.genneth.Vernier
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.llvm22
+command: vernier
+
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --share=ipc
+  # PDFs are opened via the file-chooser portal, so no broad filesystem access.
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm22/bin
+  prepend-ld-library-path: /usr/lib/sdk/llvm22/lib
+  env:
+    CARGO_HOME: /run/build/vernier/cargo
+    CARGO_NET_OFFLINE: 'true'
+    LIBCLANG_PATH: /usr/lib/sdk/llvm22/lib
+
+modules:
+  - name: vernier
+    buildsystem: simple
+    build-commands:
+      - cargo --offline build --release -p vernier
+      - install -Dm755 target/release/vernier /app/bin/vernier
+      - install -Dm644 io.github.genneth.Vernier.desktop /app/share/applications/io.github.genneth.Vernier.desktop
+      - install -Dm644 io.github.genneth.Vernier.svg /app/share/icons/hicolor/scalable/apps/io.github.genneth.Vernier.svg
+      - install -Dm644 io.github.genneth.Vernier.metainfo.xml /app/share/metainfo/io.github.genneth.Vernier.metainfo.xml
+      - install -Dm644 LICENSE /app/share/licenses/io.github.genneth.Vernier/LICENSE
+    sources:
+      - type: git
+        path: ..
+        branch: main
+      - type: file
+        path: io.github.genneth.Vernier.desktop
+      - type: file
+        path: io.github.genneth.Vernier.svg
+      - type: file
+        path: io.github.genneth.Vernier.metainfo.xml
+      - type: file
+        path: ../LICENSE
+      - cargo-sources.json

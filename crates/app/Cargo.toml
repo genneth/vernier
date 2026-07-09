@@ -1,0 +1,18 @@
+[package]
+name = "vernier"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Measure and take off quantities from PDF drawings"
+repository = "https://github.com/genneth/vernier"
+
+[dependencies]
+vernier-core = { path = "../core" }
+anyhow = "1"
+async-channel = "2"
+gtk4 = { version = "0.11", features = ["v4_14"] }
+libadwaita = { version = "0.9", features = ["v1_5"] }
+glib = "0.22"
+pangocairo = "0.22"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

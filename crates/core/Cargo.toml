@@ -1,0 +1,17 @@
+[package]
+name = "vernier-core"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Headless core for Vernier: PDF geometry extraction, snapping, scale, measure tools"
+repository = "https://github.com/genneth/vernier"
+
+[dependencies]
+mupdf = "0.7"
+rstar = "0.12"
+kurbo = "0.11"
+anyhow = "1"
+tracing = "0.1"
+
+[dev-dependencies]
+approx = "0.5"

@@ -1,0 +1,25 @@
+# Rust (Cargo.lock IS committed for the binary app)
+/target/
+**/target/
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor / OS
+*.swp
+.DS_Store
+
+# Local scratch space (throwaway spikes, logs, headless-verify screenshots)
+/scratch/
+
+# Machine-local agent instructions
+CLAUDE.local.md
+
+# Flatpak build artifacts
+/.flatpak-builder/
+/build-dir/
+/repo/
+
+# fetched on demand (see packaging/README.md)
+packaging/flatpak-cargo-generator.py

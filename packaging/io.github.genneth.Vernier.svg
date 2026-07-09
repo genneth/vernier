@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#33b1a3"/>
+      <stop offset="1" stop-color="#0c5450"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f9e07a"/>
+      <stop offset="1" stop-color="#e5a50a"/>
+    </linearGradient>
+    <radialGradient id="wheel" cx="0.35" cy="0.3" r="0.85">
+      <stop offset="0" stop-color="#ffbe6f"/>
+      <stop offset="1" stop-color="#c64600"/>
+    </radialGradient>
+  </defs>
+  <rect x="20" y="20" width="216" height="216" rx="56" fill="url(#bg)"/>
+
+  <!-- round bar, gripped across its diameter -->
+  <circle cx="98" cy="158" r="30" fill="url(#bar)"/>
+
+  <!-- graduated beam (straight -> flat) with a few bold, even graduations -->
+  <rect x="40" y="100" width="176" height="24" rx="7" fill="#f6f5f4"/>
+  <g stroke="#0c5450" stroke-width="4" stroke-linecap="round">
+    <line x1="64"  y1="105" x2="64"  y2="119"/>
+    <line x1="88"  y1="105" x2="88"  y2="113"/>
+    <line x1="112" y1="105" x2="112" y2="119"/>
+    <line x1="204" y1="105" x2="204" y2="119"/>
+  </g>
+
+  <!-- fixed jaw assembly: bold lower outside jaw + tapered upper inside jaw -->
+  <rect x="40" y="124" width="28" height="68" rx="6" fill="#f6f5f4"/>
+  <polygon points="40,100 68,100 60,62 48,62" fill="#f6f5f4"/>
+
+  <!-- sliding jaw assembly -->
+  <rect x="128" y="124" width="28" height="68" rx="6" fill="#f6f5f4"/>
+  <rect x="122" y="84" width="64" height="42" rx="8" fill="#b8b6bd"/>
+  <polygon points="126,100 152,100 146,62 134,62" fill="#f6f5f4"/>
+  <rect x="156" y="95" width="22" height="18" rx="3" fill="#0c3f3a"/>
+  <circle cx="188" cy="120" r="11" fill="url(#wheel)"/>
+</svg>

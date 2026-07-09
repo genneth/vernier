@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.genneth.Vernier</id>
+  <name>Vernier</name>
+  <summary>Measure and take off quantities from PDF drawings</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <developer id="io.github.genneth">
+    <name>genneth</name>
+  </developer>
+  <description>
+    <p>
+      Vernier turns a PDF drawing into a measuring tool. Set a real-world scale from
+      one known dimension, then measure lengths with CAD-style snapping that locks the
+      cursor onto the drawing's real vector geometry instead of eyeballed pixels.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Render PDF plans with smooth pan and zoom, crisp at any magnification</li>
+      <li>Set a scale from a known dimension (e.g. 3000 mm)</li>
+      <li>Measure polyline lengths with vertex and endpoint snapping</li>
+      <li>Live readout in real-world units</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.genneth.Vernier.desktop</launchable>
+  <url type="homepage">https://github.com/genneth/vernier</url>
+  <url type="bugtracker">https://github.com/genneth/vernier/issues</url>
+  <url type="vcs-browser">https://github.com/genneth/vernier</url>
+  <provides>
+    <mediatype>application/pdf</mediatype>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Measuring on a floor plan, with the scale set and a live readout</caption>
+      <image>https://raw.githubusercontent.com/genneth/vernier/main/packaging/screenshots/measure.png</image>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="0.1.0" date="2026-06-21">
+      <description>
+        <p>Initial MVP: render a PDF plan, set scale, and measure with snapping.</p>
+      </description>
+    </release>
+  </releases>
+</component>

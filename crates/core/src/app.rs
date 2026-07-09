@@ -7,6 +7,8 @@ use crate::tools::set_scale::SetScaleTool;
 use crate::view::View;
 
 const SNAP_PX: f64 = 12.0;
+/// Hover hit threshold for committed dimensions, in screen px.
+const HIT_PX: f64 = 12.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Tool {
@@ -22,6 +24,8 @@ pub struct AppState {
     /// the snap marker and the in-progress dimension preview.
     cursor: Option<PagePt>,
     dimensions: Dimensions,
+    /// Index into `dimensions.committed()` under the pointer, if any.
+    hover: Option<usize>,
     set_scale: SetScaleTool,
     index: Option<SnapIndex>,
 }
@@ -34,6 +38,7 @@ impl AppState {
             tool: Tool::Measure,
             cursor: None,
             dimensions: Dimensions::new(),
+            hover: None,
             set_scale: SetScaleTool::new(),
             index: None,
         }
@@ -133,6 +138,27 @@ impl AppState {
     pub fn on_pointer_move(&mut self, screen: ScreenPt) {
         // Snap in both tools so the snap marker always shows on hover.
         self.cursor = Some(self.snap(screen));
+        self.hover = self.hit_test_dimension(screen);
+    }
+
+    /// Nearest committed dimension within `HIT_PX` of the cursor (screen space).
+    fn hit_test_dimension(&self, screen: ScreenPt) -> Option<usize> {
+        let mut best: Option<(usize, f64)> = None;
+        for (i, (a, b)) in self.dimensions.committed().iter().enumerate() {
+            let d = dist_to_segment(
+                screen,
+                self.view.page_to_screen(*a),
+                self.view.page_to_screen(*b),
+            );
+            if d <= HIT_PX && best.map_or(true, |(_, bd)| d < bd) {
+                best = Some((i, d));
+            }
+        }
+        best.map(|(i, _)| i)
+    }
+
+    pub fn hovered_dimension(&self) -> Option<usize> {
+        self.hover
     }
 
     pub fn on_click(&mut self, screen: ScreenPt) {
@@ -172,6 +198,20 @@ impl Default for AppState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Distance from `p` to the segment `a`–`b`, all in screen space.
+fn dist_to_segment(p: ScreenPt, a: ScreenPt, b: ScreenPt) -> f64 {
+    let (vx, vy) = (b.x - a.x, b.y - a.y);
+    let (wx, wy) = (p.x - a.x, p.y - a.y);
+    let len2 = vx * vx + vy * vy;
+    let t = if len2 == 0.0 {
+        0.0
+    } else {
+        ((wx * vx + wy * vy) / len2).clamp(0.0, 1.0)
+    };
+    let (dx, dy) = (wx - t * vx, wy - t * vy);
+    (dx * dx + dy * dy).sqrt()
 }
 
 #[cfg(test)]
@@ -226,5 +266,42 @@ mod tests {
         assert!(s.dimensions().pending().is_some());
         s.cancel();
         assert!(s.dimensions().pending().is_none());
+    }
+
+    #[test]
+    fn hover_hits_dimension_within_threshold() {
+        let mut s = AppState::new();
+        // Identity view (zoom 1, pan 0): screen == page.
+        s.on_click(ScreenPt { x: 10.0, y: 10.0 });
+        s.on_click(ScreenPt { x: 110.0, y: 10.0 });
+        s.on_pointer_move(ScreenPt { x: 60.0, y: 15.0 }); // 5 px off the line
+        assert_eq!(s.hovered_dimension(), Some(0));
+        s.on_pointer_move(ScreenPt { x: 60.0, y: 40.0 }); // 30 px off
+        assert_eq!(s.hovered_dimension(), None);
+    }
+
+    #[test]
+    fn hover_prefers_nearest_of_overlapping_dimensions() {
+        let mut s = AppState::new();
+        s.on_click(ScreenPt { x: 0.0, y: 0.0 });
+        s.on_click(ScreenPt { x: 100.0, y: 0.0 });
+        s.on_click(ScreenPt { x: 0.0, y: 8.0 });
+        s.on_click(ScreenPt { x: 100.0, y: 8.0 });
+        s.on_pointer_move(ScreenPt { x: 50.0, y: 6.0 }); // 6 px from #0, 2 px from #1
+        assert_eq!(s.hovered_dimension(), Some(1));
+    }
+
+    #[test]
+    fn hover_threshold_is_screen_space() {
+        let mut s = AppState::new();
+        s.on_click(ScreenPt { x: 10.0, y: 10.0 });
+        s.on_click(ScreenPt { x: 110.0, y: 10.0 });
+        // Zoom in 4x: the same page-space offset is now 4x bigger on screen.
+        s.set_zoom(4.0);
+        // Page point (60, 12.5) -> screen (240, 50); the line is at screen y 40.
+        s.on_pointer_move(ScreenPt { x: 240.0, y: 50.0 }); // 10 px off on screen
+        assert_eq!(s.hovered_dimension(), Some(0));
+        s.on_pointer_move(ScreenPt { x: 240.0, y: 56.0 }); // 16 px off on screen
+        assert_eq!(s.hovered_dimension(), None);
     }
 }

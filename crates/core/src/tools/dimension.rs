@@ -17,8 +17,14 @@ impl Dimensions {
     }
 
     /// Add a point. Returns `true` if this click completed (committed) a dimension.
+    /// A second click on the same snapped point is ignored (no zero-length
+    /// dimensions) — the first point stays pending.
     pub fn add_point(&mut self, p: PagePt) -> bool {
         if let Some(seg) = self.builder.click(p) {
+            if seg.0 == seg.1 {
+                self.builder.click(seg.0); // re-arm the pending point
+                return false;
+            }
             self.committed.push(seg);
             true
         } else {
@@ -63,6 +69,19 @@ mod tests {
         assert!(d.add_point(p(3.0, 4.0)));
         assert_eq!(d.pending(), None);
         assert_eq!(d.committed(), &[(p(0.0, 0.0), p(3.0, 4.0))]);
+    }
+
+    #[test]
+    fn same_point_twice_commits_nothing_and_stays_pending() {
+        let mut d = Dimensions::new();
+        assert!(!d.add_point(p(2.0, 3.0)));
+        // Same snapped point again: no zero-length dimension.
+        assert!(!d.add_point(p(2.0, 3.0)));
+        assert_eq!(d.committed(), &[]);
+        assert_eq!(d.pending(), Some(p(2.0, 3.0)));
+        // A different point still completes it.
+        assert!(d.add_point(p(5.0, 3.0)));
+        assert_eq!(d.committed(), &[(p(2.0, 3.0), p(5.0, 3.0))]);
     }
 
     #[test]

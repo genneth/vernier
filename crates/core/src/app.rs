@@ -9,6 +9,9 @@ use crate::view::View;
 const SNAP_PX: f64 = 12.0;
 /// Hover hit threshold for committed dimensions, in screen px.
 const HIT_PX: f64 = 12.0;
+/// Margin right of a dimension's label chip that still counts as hovering it —
+/// the delete badge appears there, and hover must survive the trip to it.
+const BADGE_ZONE_PX: f64 = 26.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Tool {
@@ -26,6 +29,11 @@ pub struct AppState {
     dimensions: Dimensions,
     /// Index into `dimensions.committed()` under the pointer, if any.
     hover: Option<usize>,
+    /// Screen-space label-chip rects, index-aligned with `dimensions.committed()`,
+    /// fed back by the draw pass (the core cannot measure text). Hovering the
+    /// chip counts as hovering its dimension — vital when the line is vertical
+    /// and the chip (and delete badge) sit beside it.
+    label_rects: Vec<(f64, f64, f64, f64)>,
     set_scale: SetScaleTool,
     index: Option<SnapIndex>,
 }
@@ -39,6 +47,7 @@ impl AppState {
             cursor: None,
             dimensions: Dimensions::new(),
             hover: None,
+            label_rects: Vec::new(),
             set_scale: SetScaleTool::new(),
             index: None,
         }
@@ -117,7 +126,9 @@ impl AppState {
     pub fn delete_dimension(&mut self, idx: usize) -> Option<(PagePt, PagePt)> {
         let seg = self.dimensions.remove(idx);
         if seg.is_some() {
-            self.hover = None; // index is stale now
+            // Both are index-aligned with committed() and stale now.
+            self.hover = None;
+            self.label_rects.clear();
         }
         seg
     }
@@ -154,8 +165,24 @@ impl AppState {
         self.hover = self.hit_test_dimension(screen);
     }
 
-    /// Nearest committed dimension within `HIT_PX` of the cursor (screen space).
+    /// Replace the label-chip rects reported by the last draw pass.
+    pub fn set_label_rects(&mut self, rects: Vec<(f64, f64, f64, f64)>) {
+        self.label_rects = rects;
+    }
+
+    /// Nearest committed dimension within `HIT_PX` of the cursor (screen space),
+    /// or the one whose label chip (plus badge margin) contains the cursor.
     fn hit_test_dimension(&self, screen: ScreenPt) -> Option<usize> {
+        for (i, (x, y, w, h)) in self.label_rects.iter().enumerate() {
+            if i < self.dimensions.committed().len()
+                && screen.x >= *x
+                && screen.x <= x + w + BADGE_ZONE_PX
+                && screen.y >= *y
+                && screen.y <= y + h
+            {
+                return Some(i);
+            }
+        }
         let mut best: Option<(usize, f64)> = None;
         for (i, (a, b)) in self.dimensions.committed().iter().enumerate() {
             let d = dist_to_segment(
@@ -317,6 +344,36 @@ mod tests {
         s.on_click(ScreenPt { x: 100.0, y: 8.0 });
         s.on_pointer_move(ScreenPt { x: 50.0, y: 6.0 }); // 6 px from #0, 2 px from #1
         assert_eq!(s.hovered_dimension(), Some(1));
+    }
+
+    #[test]
+    fn hover_via_label_rect_works_for_vertical_dimension() {
+        let mut s = AppState::new();
+        s.on_click(ScreenPt { x: 100.0, y: 100.0 });
+        s.on_click(ScreenPt { x: 100.0, y: 300.0 }); // vertical line
+        // The label chip sits beside the line (as the draw pass would report).
+        s.set_label_rects(vec![(60.0, 186.0, 80.0, 28.0)]);
+        s.on_pointer_move(ScreenPt { x: 70.0, y: 200.0 }); // in chip, 30 px off line
+        assert_eq!(s.hovered_dimension(), Some(0));
+        // The margin right of the chip (where the delete badge appears) counts
+        // too, so hover survives the trip from chip to badge.
+        s.on_pointer_move(ScreenPt { x: 160.0, y: 200.0 });
+        assert_eq!(s.hovered_dimension(), Some(0));
+        s.on_pointer_move(ScreenPt { x: 60.0, y: 260.0 }); // outside chip and line
+        assert_eq!(s.hovered_dimension(), None);
+    }
+
+    #[test]
+    fn label_rects_are_dropped_on_delete() {
+        let mut s = AppState::new();
+        s.on_click(ScreenPt { x: 100.0, y: 100.0 });
+        s.on_click(ScreenPt { x: 100.0, y: 300.0 });
+        s.set_label_rects(vec![(60.0, 186.0, 80.0, 28.0)]);
+        s.on_pointer_move(ScreenPt { x: 70.0, y: 200.0 });
+        s.delete_dimension(0).unwrap();
+        // Stale rects must not hover a dimension that no longer exists.
+        s.on_pointer_move(ScreenPt { x: 70.0, y: 200.0 });
+        assert_eq!(s.hovered_dimension(), None);
     }
 
     #[test]

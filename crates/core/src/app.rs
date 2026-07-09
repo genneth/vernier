@@ -113,6 +113,19 @@ impl AppState {
         }
     }
 
+    /// Delete a committed dimension; returns it so the caller can offer undo.
+    pub fn delete_dimension(&mut self, idx: usize) -> Option<(PagePt, PagePt)> {
+        let seg = self.dimensions.remove(idx);
+        if seg.is_some() {
+            self.hover = None; // index is stale now
+        }
+        seg
+    }
+
+    pub fn restore_dimension(&mut self, seg: (PagePt, PagePt)) {
+        self.dimensions.push(seg);
+    }
+
     /// Map a screen point to page space, snapping to a vertex if one is in range.
     pub fn snap(&self, screen: ScreenPt) -> PagePt {
         let page = self.view.screen_to_page(screen);
@@ -266,6 +279,21 @@ mod tests {
         assert!(s.dimensions().pending().is_some());
         s.cancel();
         assert!(s.dimensions().pending().is_none());
+    }
+
+    #[test]
+    fn delete_and_restore_round_trip() {
+        let mut s = AppState::new();
+        s.on_click(ScreenPt { x: 10.0, y: 10.0 });
+        s.on_click(ScreenPt { x: 110.0, y: 10.0 });
+        s.on_pointer_move(ScreenPt { x: 60.0, y: 12.0 });
+        let idx = s.hovered_dimension().unwrap();
+        let seg = s.delete_dimension(idx).unwrap();
+        assert_eq!(s.dimensions().committed().len(), 0);
+        assert_eq!(s.hovered_dimension(), None); // stale hover cleared
+        assert!(s.delete_dimension(0).is_none()); // out of range is safe
+        s.restore_dimension(seg);
+        assert_eq!(s.dimensions().committed().len(), 1);
     }
 
     #[test]

@@ -40,6 +40,20 @@ impl Dimensions {
         &self.committed
     }
 
+    /// Remove a committed dimension by index (returned for undo).
+    pub fn remove(&mut self, idx: usize) -> Option<(PagePt, PagePt)> {
+        if idx < self.committed.len() {
+            Some(self.committed.remove(idx))
+        } else {
+            None
+        }
+    }
+
+    /// Reinsert a dimension (undo of `remove`; order is not meaningful).
+    pub fn push(&mut self, seg: (PagePt, PagePt)) {
+        self.committed.push(seg);
+    }
+
     /// Cancel the in-progress dimension (keeps committed ones). Returns whether
     /// there was a pending point.
     pub fn cancel_pending(&mut self) -> bool {

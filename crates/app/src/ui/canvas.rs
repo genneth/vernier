@@ -45,10 +45,14 @@ mod imp {
         pub preview: RefCell<Option<gtk4::gdk::Texture>>,
         /// Full page size (pts), so the page extent and preview can be placed.
         pub page_size: Cell<(f64, f64)>,
-        /// Screen rect (x, y, w, h) of the × delete glyph on the hovered
+        /// Screen rect (x, y, w, h) of the × delete badge beside the hovered
         /// dimension's label, refreshed each overlay draw. None when nothing
         /// is hovered.
         pub close_rect: Cell<Option<(f64, f64, f64, f64)>>,
+        /// Screen rects of every dimension's label chip, index-aligned with
+        /// committed dimensions, refreshed each overlay draw. Fed back into the
+        /// core hover hit-test (hovering the chip = hovering the dimension).
+        pub label_rects: RefCell<Vec<(f64, f64, f64, f64)>>,
         /// Last allocated size + a callback fired (with the previous size) when
         /// it changes — drives the re-fit-on-resize of the fit zoom modes.
         pub last_alloc: Cell<(i32, i32)>,
@@ -121,7 +125,14 @@ mod imp {
 
             // Overlay (dimensions, calibration, snap marker) via Cairo, same transform.
             let cr = snapshot.append_cairo(&graphene::Rect::new(0.0, 0.0, w, h));
-            draw_overlay(&cr, widget.upcast_ref::<gtk4::Widget>(), &app, &v, &self.close_rect);
+            draw_overlay(
+                &cr,
+                widget.upcast_ref::<gtk4::Widget>(),
+                &app,
+                &v,
+                &self.close_rect,
+                &self.label_rects,
+            );
         }
 
         fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
@@ -158,9 +169,14 @@ impl PageView {
         obj
     }
 
-    /// Screen rect of the hovered dimension's × delete glyph, if showing.
+    /// Screen rect of the hovered dimension's × delete badge, if showing.
     pub fn close_rect(&self) -> Option<(f64, f64, f64, f64)> {
         self.imp().close_rect.get()
+    }
+
+    /// Screen rects of all dimension label chips, from the last overlay draw.
+    pub fn label_rects(&self) -> Vec<(f64, f64, f64, f64)> {
+        self.imp().label_rects.borrow().clone()
     }
 
     fn set_page_texture(&self, tex: gtk4::gdk::Texture, origin: (f64, f64), scale: f64) {
@@ -940,10 +956,12 @@ fn draw_overlay(
     app: &AppState,
     v: &View,
     close_rect: &Cell<Option<(f64, f64, f64, f64)>>,
+    label_rects: &RefCell<Vec<(f64, f64, f64, f64)>>,
 ) {
     close_rect.set(None);
     let dims = app.dimensions();
     let hovered = app.hovered_dimension();
+    let mut rects = Vec::with_capacity(dims.committed().len());
     for (i, (a, b)) in dims.committed().iter().enumerate() {
         let sa = v.page_to_screen(*a);
         let sb = v.page_to_screen(*b);
@@ -952,18 +970,22 @@ fn draw_overlay(
         halo_line(cr, sa, sb, col, if hot { 4.0 } else { 2.5 }, false);
         dot(cr, sa, col);
         dot(cr, sb, col);
-        let label = if hot {
-            format!("{}  ✕", app.format_len(a.distance(b)))
-        } else {
-            app.format_len(a.distance(b))
-        };
-        let rect = pill(widget, cr, (sa.x + sb.x) / 2.0, (sa.y + sb.y) / 2.0, &label);
+        // The chip is identical hovered or not, so nothing shifts; the delete
+        // badge appears OUTSIDE it, in the empty space off its right edge.
+        let rect = pill(
+            widget,
+            cr,
+            (sa.x + sb.x) / 2.0,
+            (sa.y + sb.y) / 2.0,
+            &app.format_len(a.distance(b)),
+        );
+        rects.push(rect);
         if hot {
-            // The × glyph occupies the right end of the chip.
             let (x, y, w, h) = rect;
-            close_rect.set(Some((x + w - 22.0, y, 22.0, h)));
+            close_rect.set(Some(close_badge(cr, x + w + 12.0, y + h / 2.0)));
         }
     }
+    label_rects.replace(rects);
 
     match app.active_tool() {
         Tool::Measure => {
@@ -1019,6 +1041,28 @@ fn halo_line(cr: &gtk4::cairo::Context, a: ScreenPt, b: ScreenPt, c: (f64, f64, 
     cr.set_source_rgb(c.0, c.1, c.2);
     let _ = cr.stroke();
     cr.set_dash(&[], 0.0);
+}
+
+/// A small round × delete badge centred at (cx, cy). Returns its hit rect,
+/// padded for clickability.
+fn close_badge(cr: &gtk4::cairo::Context, cx: f64, cy: f64) -> (f64, f64, f64, f64) {
+    let r = 9.0;
+    cr.arc(cx, cy, r, 0.0, std::f64::consts::TAU);
+    cr.set_source_rgba(0.0, 0.0, 0.0, 0.82);
+    let _ = cr.fill();
+    cr.arc(cx, cy, r, 0.0, std::f64::consts::TAU);
+    cr.set_line_width(1.5);
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.9);
+    let _ = cr.stroke();
+    let k = 3.5;
+    cr.set_line_width(2.0);
+    cr.set_source_rgb(1.0, 1.0, 1.0);
+    cr.move_to(cx - k, cy - k);
+    cr.line_to(cx + k, cy + k);
+    cr.move_to(cx + k, cy - k);
+    cr.line_to(cx - k, cy + k);
+    let _ = cr.stroke();
+    (cx - 11.0, cy - 11.0, 22.0, 22.0)
 }
 
 /// A filled endpoint dot with a dark halo ring.

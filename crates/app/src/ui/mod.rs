@@ -228,7 +228,13 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
         motion.connect_motion(move |_, x, y| {
             let sp = ScreenPt { x, y };
             cursor.set(sp);
-            cb.state.borrow_mut().on_pointer_move(sp);
+            {
+                let mut st = cb.state.borrow_mut();
+                // Feed the chip rects from the last draw into the hover
+                // hit-test (hovering a label = hovering its dimension).
+                st.set_label_rects(cb.area.label_rects());
+                st.on_pointer_move(sp);
+            }
             cb.area.queue_draw();
         });
         canvas.area.add_controller(motion);

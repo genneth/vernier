@@ -17,6 +17,7 @@ use vernier_core::view::View;
 
 // Colourblind-safe overlay palette (IBM), distinguished also by shape/style.
 const COL_DIM: (f64, f64, f64) = (0.392, 0.561, 1.0); // #648FFF — measurements
+const COL_DIM_HOT: (f64, f64, f64) = (0.55, 0.69, 1.0); // hovered measurement
 const COL_SCALE: (f64, f64, f64) = (0.863, 0.149, 0.498); // #DC267F — scale calibration
 const COL_SNAP: (f64, f64, f64) = (0.996, 0.380, 0.0); // #FE6100 — snap marker
 
@@ -44,6 +45,10 @@ mod imp {
         pub preview: RefCell<Option<gtk4::gdk::Texture>>,
         /// Full page size (pts), so the page extent and preview can be placed.
         pub page_size: Cell<(f64, f64)>,
+        /// Screen rect (x, y, w, h) of the × delete glyph on the hovered
+        /// dimension's label, refreshed each overlay draw. None when nothing
+        /// is hovered.
+        pub close_rect: Cell<Option<(f64, f64, f64, f64)>>,
         /// Last allocated size + a callback fired (with the previous size) when
         /// it changes — drives the re-fit-on-resize of the fit zoom modes.
         pub last_alloc: Cell<(i32, i32)>,
@@ -116,7 +121,7 @@ mod imp {
 
             // Overlay (dimensions, calibration, snap marker) via Cairo, same transform.
             let cr = snapshot.append_cairo(&graphene::Rect::new(0.0, 0.0, w, h));
-            draw_overlay(&cr, widget.upcast_ref::<gtk4::Widget>(), &app, &v);
+            draw_overlay(&cr, widget.upcast_ref::<gtk4::Widget>(), &app, &v, &self.close_rect);
         }
 
         fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
@@ -151,6 +156,11 @@ impl PageView {
         obj.update_property(&[gtk4::accessible::Property::Label("Plan canvas")]);
         *obj.imp().state.borrow_mut() = Some(state);
         obj
+    }
+
+    /// Screen rect of the hovered dimension's × delete glyph, if showing.
+    pub fn close_rect(&self) -> Option<(f64, f64, f64, f64)> {
+        self.imp().close_rect.get()
     }
 
     fn set_page_texture(&self, tex: gtk4::gdk::Texture, origin: (f64, f64), scale: f64) {
@@ -924,21 +934,35 @@ fn make_texture(bytes: Vec<u8>, width: u32, height: u32) -> Option<gtk4::gdk::Te
 }
 
 /// The measurement / calibration overlay, in screen space. Shared by the canvas.
-fn draw_overlay(cr: &gtk4::cairo::Context, widget: &gtk4::Widget, app: &AppState, v: &View) {
+fn draw_overlay(
+    cr: &gtk4::cairo::Context,
+    widget: &gtk4::Widget,
+    app: &AppState,
+    v: &View,
+    close_rect: &Cell<Option<(f64, f64, f64, f64)>>,
+) {
+    close_rect.set(None);
     let dims = app.dimensions();
-    for (a, b) in dims.committed() {
+    let hovered = app.hovered_dimension();
+    for (i, (a, b)) in dims.committed().iter().enumerate() {
         let sa = v.page_to_screen(*a);
         let sb = v.page_to_screen(*b);
-        halo_line(cr, sa, sb, COL_DIM, 2.5, false);
-        dot(cr, sa, COL_DIM);
-        dot(cr, sb, COL_DIM);
-        pill(
-            widget,
-            cr,
-            (sa.x + sb.x) / 2.0,
-            (sa.y + sb.y) / 2.0,
-            &app.format_len(a.distance(b)),
-        );
+        let hot = hovered == Some(i);
+        let col = if hot { COL_DIM_HOT } else { COL_DIM };
+        halo_line(cr, sa, sb, col, if hot { 4.0 } else { 2.5 }, false);
+        dot(cr, sa, col);
+        dot(cr, sb, col);
+        let label = if hot {
+            format!("{}  ✕", app.format_len(a.distance(b)))
+        } else {
+            app.format_len(a.distance(b))
+        };
+        let rect = pill(widget, cr, (sa.x + sb.x) / 2.0, (sa.y + sb.y) / 2.0, &label);
+        if hot {
+            // The × glyph occupies the right end of the chip.
+            let (x, y, w, h) = rect;
+            close_rect.set(Some((x + w - 22.0, y, 22.0, h)));
+        }
     }
 
     match app.active_tool() {
@@ -1009,7 +1033,14 @@ fn dot(cr: &gtk4::cairo::Context, s: ScreenPt, c: (f64, f64, f64)) {
 
 /// A rounded dark pill with white text, centred at (cx, cy). Uses the widget's
 /// own font via Pango — system family + size, honouring text-scaling — in bold.
-fn pill(widget: &gtk4::Widget, cr: &gtk4::cairo::Context, cx: f64, cy: f64, text: &str) {
+/// Returns the chip's screen rect (x, y, w, h).
+fn pill(
+    widget: &gtk4::Widget,
+    cr: &gtk4::cairo::Context,
+    cx: f64,
+    cy: f64,
+    text: &str,
+) -> (f64, f64, f64, f64) {
     let layout = widget.create_pango_layout(Some(text));
     if let Some(mut fd) = widget.pango_context().font_description() {
         fd.set_weight(pango::Weight::Bold);
@@ -1035,4 +1066,5 @@ fn pill(widget: &gtk4::Widget, cr: &gtk4::cairo::Context, cx: f64, cy: f64, text
     cr.set_source_rgb(1.0, 1.0, 1.0);
     cr.move_to(cx - tw / 2.0, cy - th / 2.0);
     pangocairo::functions::show_layout(cr, &layout);
+    (x, y, w, h)
 }

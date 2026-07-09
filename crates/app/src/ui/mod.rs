@@ -119,7 +119,9 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
 
     let split = adw::OverlaySplitView::new();
     split.set_sidebar(Some(&sidebar_box));
-    split.set_content(Some(&canvas.area));
+    let toasts = adw::ToastOverlay::new();
+    toasts.set_child(Some(&canvas.area));
+    split.set_content(Some(&toasts));
     split.set_min_sidebar_width(180.0);
     split.set_max_sidebar_width(220.0);
     split.set_show_sidebar(false);
@@ -232,12 +234,20 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
         canvas.area.add_controller(motion);
     }
 
-    // Left click: place a (snapped) dimension / scale point.
+    // Left click: place a (snapped) dimension / scale point — unless it lands
+    // on the hovered dimension's × delete glyph.
     {
         let cb = canvas.clone();
+        let toasts = toasts.clone();
         let click = gtk4::GestureClick::new();
         click.set_button(gtk4::gdk::BUTTON_PRIMARY);
         click.connect_pressed(move |_, _, x, y| {
+            if let Some((rx, ry, rw, rh)) = cb.area.close_rect() {
+                if x >= rx && x <= rx + rw && y >= ry && y <= ry + rh {
+                    delete_hovered(&cb, &toasts);
+                    return;
+                }
+            }
             {
                 let mut st = cb.state.borrow_mut();
                 let tool = st.active_tool();
@@ -258,6 +268,18 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
             cb.area.queue_draw();
         });
         canvas.area.add_controller(click);
+    }
+
+    // Right click: delete the hovered dimension (undo via toast).
+    {
+        let cb = canvas.clone();
+        let toasts = toasts.clone();
+        let rclick = gtk4::GestureClick::new();
+        rclick.set_button(gtk4::gdk::BUTTON_SECONDARY);
+        rclick.connect_pressed(move |_, _, _, _| {
+            delete_hovered(&cb, &toasts);
+        });
+        canvas.area.add_controller(rclick);
     }
 
     // Scroll = zoom about the cursor.
@@ -586,4 +608,29 @@ fn build_zoom_popover(canvas: &Rc<PdfCanvas>) -> gtk4::Popover {
 
     pop.set_child(Some(&vb));
     pop
+}
+
+/// Delete the hovered dimension (if any) and offer undo via a toast.
+fn delete_hovered(cb: &Rc<PdfCanvas>, toasts: &adw::ToastOverlay) {
+    let (seg, len) = {
+        let mut st = cb.state.borrow_mut();
+        let Some(idx) = st.hovered_dimension() else { return };
+        let Some(seg) = st.delete_dimension(idx) else { return };
+        let len = st.format_len(seg.0.distance(&seg.1));
+        (seg, len)
+    };
+    tracing::info!("dimension deleted: {len}");
+    let toast = adw::Toast::builder()
+        .title(format!("Deleted {len}"))
+        .button_label("Undo")
+        .build();
+    let cb2 = cb.clone();
+    let len2 = len.clone();
+    toast.connect_button_clicked(move |_| {
+        cb2.state.borrow_mut().restore_dimension(seg);
+        tracing::info!("dimension restored: {len2}");
+        cb2.area.queue_draw();
+    });
+    toasts.add_toast(toast);
+    cb.area.queue_draw();
 }

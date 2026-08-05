@@ -84,7 +84,9 @@ impl AppState {
                 n += 1;
             }
         }
-        tracing::debug!("snap geometry: {n} vertices, bbox [{minx:.0},{miny:.0}]..[{maxx:.0},{maxy:.0}]");
+        tracing::debug!(
+            "snap geometry: {n} vertices, bbox [{minx:.0},{miny:.0}]..[{maxx:.0},{maxy:.0}]"
+        );
         self.index = Some(SnapIndex::build(&polylines));
     }
 
@@ -190,7 +192,7 @@ impl AppState {
                 self.view.page_to_screen(*a),
                 self.view.page_to_screen(*b),
             );
-            if d <= HIT_PX && best.map_or(true, |(_, bd)| d < bd) {
+            if d <= HIT_PX && best.is_none_or(|(_, bd)| d < bd) {
                 best = Some((i, d));
             }
         }
@@ -278,7 +280,10 @@ mod tests {
         let mut s = state_with_vertex_at(PagePt { x: 100.0, y: 100.0 });
         s.set_tool(Tool::Measure);
         s.on_click(ScreenPt { x: 104.0, y: 100.0 });
-        assert_eq!(s.dimensions().pending(), Some(PagePt { x: 100.0, y: 100.0 }));
+        assert_eq!(
+            s.dimensions().pending(),
+            Some(PagePt { x: 100.0, y: 100.0 })
+        );
     }
 
     #[test]
@@ -351,7 +356,7 @@ mod tests {
         let mut s = AppState::new();
         s.on_click(ScreenPt { x: 100.0, y: 100.0 });
         s.on_click(ScreenPt { x: 100.0, y: 300.0 }); // vertical line
-        // The label chip sits beside the line (as the draw pass would report).
+                                                     // The label chip sits beside the line (as the draw pass would report).
         s.set_label_rects(vec![(60.0, 186.0, 80.0, 28.0)]);
         s.on_pointer_move(ScreenPt { x: 70.0, y: 200.0 }); // in chip, 30 px off line
         assert_eq!(s.hovered_dimension(), Some(0));

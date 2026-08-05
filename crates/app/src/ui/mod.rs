@@ -206,15 +206,19 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
             }
             let dialog = gtk4::FileDialog::builder().title("Open PDF").build();
             let canvas = canvas.clone();
-            dialog.open(None::<&gtk4::Window>, gtk4::gio::Cancellable::NONE, move |res| {
-                if let Ok(file) = res {
-                    if let Some(path) = file.path() {
-                        if let Err(e) = canvas.open(&path.to_string_lossy()) {
-                            tracing::error!("open failed: {e}");
+            dialog.open(
+                None::<&gtk4::Window>,
+                gtk4::gio::Cancellable::NONE,
+                move |res| {
+                    if let Ok(file) = res {
+                        if let Some(path) = file.path() {
+                            if let Err(e) = canvas.open(&path.to_string_lossy()) {
+                                tracing::error!("open failed: {e}");
+                            }
                         }
                     }
-                }
-            });
+                },
+            );
         });
     }
 
@@ -267,7 +271,10 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
                         }
                     }
                     Tool::SetScale => {
-                        tracing::debug!("scale point placed (ready: {})", st.set_scale_tool().is_ready());
+                        tracing::debug!(
+                            "scale point placed (ready: {})",
+                            st.set_scale_tool().is_ready()
+                        );
                     }
                 }
             }
@@ -360,21 +367,19 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
         let entry = len_entry.clone();
         let dd = unit_dd.clone();
         let pop = scale_pop.clone();
-        let apply: Rc<dyn Fn()> = Rc::new(move || {
-            match entry.text().trim().parse::<f64>() {
-                Ok(val) => {
-                    let unit = UNITS[dd.selected() as usize];
-                    cb.state.borrow_mut().finish_set_scale(val, unit);
-                    if cb.state.borrow().scale().is_some() {
-                        tracing::info!("scale set from measurement");
-                        pop.popdown();
-                    } else {
-                        tracing::warn!("need two scale points before applying a length");
-                    }
-                    cb.area.queue_draw();
+        let apply: Rc<dyn Fn()> = Rc::new(move || match entry.text().trim().parse::<f64>() {
+            Ok(val) => {
+                let unit = UNITS[dd.selected() as usize];
+                cb.state.borrow_mut().finish_set_scale(val, unit);
+                if cb.state.borrow().scale().is_some() {
+                    tracing::info!("scale set from measurement");
+                    pop.popdown();
+                } else {
+                    tracing::warn!("need two scale points before applying a length");
                 }
-                Err(_) => tracing::warn!("could not parse length {:?}", entry.text()),
+                cb.area.queue_draw();
             }
+            Err(_) => tracing::warn!("could not parse length {:?}", entry.text()),
         });
         let f = apply.clone();
         len_entry.connect_activate(move |_| f());
@@ -416,7 +421,7 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
                 .application_name("Vernier")
                 .application_icon("io.github.genneth.Vernier")
                 .version(env!("CARGO_PKG_VERSION"))
-                .developer_name("genneth")
+                .developer_name("Gen Zhang")
                 .license_type(gtk4::License::Agpl30)
                 .comments("Measure and take off quantities from PDF drawings.")
                 .build();
@@ -523,7 +528,15 @@ fn build_scale_popover() -> (
     vbox.append(&pick_btn);
     vbox.append(&meas_row);
     pop.set_child(Some(&vbox));
-    (pop, ratio_entry, ratio_apply, len_entry, unit_dd, len_apply, pick_btn)
+    (
+        pop,
+        ratio_entry,
+        ratio_apply,
+        len_entry,
+        unit_dd,
+        len_apply,
+        pick_btn,
+    )
 }
 
 /// Target display width (px) for sidebar thumbnails.
@@ -547,7 +560,10 @@ fn make_thumb_row(page: usize) -> (gtk4::ListBoxRow, gtk4::Picture) {
     vbox.append(&label);
     let row = gtk4::ListBoxRow::new();
     row.set_child(Some(&vbox));
-    row.update_property(&[gtk4::accessible::Property::Label(&format!("Page {}", page + 1))]);
+    row.update_property(&[gtk4::accessible::Property::Label(&format!(
+        "Page {}",
+        page + 1
+    ))]);
     (row, pic)
 }
 
@@ -620,8 +636,12 @@ fn build_zoom_popover(canvas: &Rc<PdfCanvas>) -> gtk4::Popover {
 fn delete_hovered(cb: &Rc<PdfCanvas>, toasts: &adw::ToastOverlay) {
     let (seg, len) = {
         let mut st = cb.state.borrow_mut();
-        let Some(idx) = st.hovered_dimension() else { return };
-        let Some(seg) = st.delete_dimension(idx) else { return };
+        let Some(idx) = st.hovered_dimension() else {
+            return;
+        };
+        let Some(seg) = st.delete_dimension(idx) else {
+            return;
+        };
         let len = st.format_len(seg.0.distance(&seg.1));
         (seg, len)
     };

@@ -10,7 +10,9 @@ fn main() -> glib::ExitCode {
     // Logging: default INFO; override per-target via RUST_LOG, e.g.
     //   RUST_LOG=vernier=debug   or   RUST_LOG=vernier::ui::canvas=trace
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .with_target(true)
         .init();
     glib::set_application_name("Vernier");

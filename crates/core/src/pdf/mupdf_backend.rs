@@ -5,7 +5,9 @@ use std::rc::Rc;
 use anyhow::Context;
 use mupdf::device::{Device, NativeDevice};
 use mupdf::path::{Path as MuPath, PathWalker};
-use mupdf::{ColorParams, Colorspace, DisplayList, Document, IRect, Matrix, Pixmap, Rect, StrokeState};
+use mupdf::{
+    ColorParams, Colorspace, DisplayList, Document, IRect, Matrix, Pixmap, Rect, StrokeState,
+};
 
 use super::{PdfBackend, Rgba};
 use crate::geometry::{flatten_cubic, PagePt, Polyline};
@@ -29,7 +31,7 @@ impl MupdfBackend {
     /// Ensure `list_cache` holds the display list for `page` (building it once).
     fn ensure_display_list(&self, page: usize) -> anyhow::Result<()> {
         let mut cache = self.list_cache.borrow_mut();
-        if cache.as_ref().map_or(true, |(pg, _)| *pg != page) {
+        if cache.as_ref().is_none_or(|(pg, _)| *pg != page) {
             let p = self.doc.load_page(page as i32)?;
             *cache = Some((page, p.to_display_list(true)?));
         }
@@ -202,7 +204,11 @@ impl PdfBackend for MupdfBackend {
             );
             let cache = self.list_cache.borrow();
             let (_, list) = cache.as_ref().expect("display list cached above");
-            list.run(&device, &Matrix::new_scale(scale as f32, scale as f32), scissor)?;
+            list.run(
+                &device,
+                &Matrix::new_scale(scale as f32, scale as f32),
+                scissor,
+            )?;
         }
         drop(device);
 

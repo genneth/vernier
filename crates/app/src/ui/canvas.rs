@@ -247,8 +247,14 @@ enum Req {
 }
 
 enum Resp {
-    Opened { page_count: usize, page_sizes: Vec<(f64, f64)> },
-    Geometry { gen: u64, polylines: Vec<Polyline> },
+    Opened {
+        page_count: usize,
+        page_sizes: Vec<(f64, f64)>,
+    },
+    Geometry {
+        gen: u64,
+        polylines: Vec<Polyline>,
+    },
     Rendered {
         gen: u64,
         id: u64,
@@ -258,8 +264,19 @@ enum Resp {
         origin: (f64, f64),
         scale: f64,
     },
-    Preview { gen: u64, bytes: Vec<u8>, width: u32, height: u32 },
-    Thumbnail { doc: u64, page: usize, bytes: Vec<u8>, width: u32, height: u32 },
+    Preview {
+        gen: u64,
+        bytes: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
+    Thumbnail {
+        doc: u64,
+        page: usize,
+        bytes: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
     Error(String),
 }
 
@@ -279,7 +296,10 @@ fn process(
                     let n = b.page_count();
                     let sizes = (0..n).map(|i| b.page_size_pts(i)).collect();
                     *backend = Some(b);
-                    let _ = out.send_blocking(Resp::Opened { page_count: n, page_sizes: sizes });
+                    let _ = out.send_blocking(Resp::Opened {
+                        page_count: n,
+                        page_sizes: sizes,
+                    });
                 }
                 Err(e) => {
                     let _ = out.send_blocking(Resp::Error(format!("open: {e}")));
@@ -298,7 +318,13 @@ fn process(
                 }
             }
         }
-        Req::Render { gen, id, page, scale, clip } => {
+        Req::Render {
+            gen,
+            id,
+            page,
+            scale,
+            clip,
+        } => {
             if let Some(b) = backend.as_ref() {
                 let t0 = std::time::Instant::now();
                 match b.render_region(page, scale, clip) {
@@ -333,7 +359,11 @@ fn process(
                 let scale = (PREVIEW_LONG_EDGE / long).clamp(0.05, 4.0);
                 match b.render_region(page, scale, (0.0, 0.0, pw, ph)) {
                     Ok(img) => {
-                        tracing::debug!("preview rendered page {page} ({}x{})", img.width, img.height);
+                        tracing::debug!(
+                            "preview rendered page {page} ({}x{})",
+                            img.width,
+                            img.height
+                        );
                         let _ = out.send_blocking(Resp::Preview {
                             gen,
                             bytes: img.bytes,
@@ -356,7 +386,12 @@ fn process(
     }
 }
 
-fn render_thumbnail(backend: &Option<MupdfBackend>, doc: u64, page: usize, out: &async_channel::Sender<Resp>) {
+fn render_thumbnail(
+    backend: &Option<MupdfBackend>,
+    doc: u64,
+    page: usize,
+    out: &async_channel::Sender<Resp>,
+) {
     let Some(b) = backend.as_ref() else { return };
     let (pw, ph) = b.page_size_pts(page);
     if pw <= 0.0 || ph <= 0.0 {
@@ -545,7 +580,10 @@ impl PdfCanvas {
 
     fn on_response(self: &Rc<Self>, resp: Resp) {
         match resp {
-            Resp::Opened { page_count, page_sizes } => {
+            Resp::Opened {
+                page_count,
+                page_sizes,
+            } => {
                 self.page_count.set(page_count);
                 *self.page_sizes.borrow_mut() = page_sizes;
                 if let Some(f) = self.doc_listener.borrow().as_ref() {
@@ -565,7 +603,15 @@ impl PdfCanvas {
                     self.state.borrow_mut().set_geometry(polylines);
                 }
             }
-            Resp::Rendered { gen, id, bytes, width, height, origin, scale } => {
+            Resp::Rendered {
+                gen,
+                id,
+                bytes,
+                width,
+                height,
+                origin,
+                scale,
+            } => {
                 if gen != self.gen.get() || id <= self.applied_render_id.get() {
                     return; // stale page, or superseded by a newer render
                 }
@@ -582,20 +628,32 @@ impl PdfCanvas {
                     }));
                 }
             }
-            Resp::Preview { gen, bytes, width, height } => {
+            Resp::Preview {
+                gen,
+                bytes,
+                width,
+                height,
+            } => {
                 if gen == self.gen.get() {
                     if let Some(tex) = make_texture(bytes, width, height) {
                         self.area.set_preview(tex);
                     }
                 }
             }
-            Resp::Thumbnail { doc, page, bytes, width, height } => {
+            Resp::Thumbnail {
+                doc,
+                page,
+                bytes,
+                width,
+                height,
+            } => {
                 if doc != self.doc_id.get() {
                     return; // belongs to a document we've since closed
                 }
-                if let (Some(tex), Some(f)) =
-                    (make_texture(bytes, width, height), self.thumb_listener.borrow().as_ref())
-                {
+                if let (Some(tex), Some(f)) = (
+                    make_texture(bytes, width, height),
+                    self.thumb_listener.borrow().as_ref(),
+                ) {
                     f(page, tex);
                 }
             }
@@ -612,7 +670,10 @@ impl PdfCanvas {
         *self.doc_name.borrow_mut() = name;
         self.doc_id.set(self.doc_id.get() + 1);
         self.req_tx
-            .send(Req::Open { doc: self.doc_id.get(), path: path.to_owned() })
+            .send(Req::Open {
+                doc: self.doc_id.get(),
+                path: path.to_owned(),
+            })
             .map_err(|_| anyhow::anyhow!("render thread is gone"))?;
         Ok(())
     }
@@ -659,13 +720,25 @@ impl PdfCanvas {
         let (z, pan) = match self.zoom_mode.get() {
             ZoomMode::FitPage => {
                 let z = ((aw / pw).min(ah / ph) * 0.97).clamp(0.05, 40.0);
-                (z, ScreenPt { x: (aw - pw * z) / 2.0, y: (ah - ph * z) / 2.0 })
+                (
+                    z,
+                    ScreenPt {
+                        x: (aw - pw * z) / 2.0,
+                        y: (ah - ph * z) / 2.0,
+                    },
+                )
             }
             ZoomMode::FitWidth => {
                 // Keep the width fit, but retain the vertical scroll position.
                 let z = ((aw / pw) * 0.99).clamp(0.05, 40.0);
                 let cur_y = self.state.borrow().view().pan.y;
-                (z, ScreenPt { x: (aw - pw * z) / 2.0, y: cur_y })
+                (
+                    z,
+                    ScreenPt {
+                        x: (aw - pw * z) / 2.0,
+                        y: cur_y,
+                    },
+                )
             }
             ZoomMode::Free => {
                 // Retain zoom and pan exactly — same region of the new page.
@@ -885,7 +958,10 @@ impl PdfCanvas {
         {
             let mut st = self.state.borrow_mut();
             st.set_zoom(z);
-            st.set_pan(ScreenPt { x: (aw - pw * z) / 2.0, y: (ah - ph * z) / 2.0 });
+            st.set_pan(ScreenPt {
+                x: (aw - pw * z) / 2.0,
+                y: (ah - ph * z) / 2.0,
+            });
         }
         self.area.queue_draw();
         self.schedule_rerender();
@@ -917,7 +993,10 @@ impl PdfCanvas {
             let v = st.view();
             let page_cy = (ref_h / 2.0 - v.pan.y) / v.zoom;
             st.set_zoom(z);
-            st.set_pan(ScreenPt { x: (aw - pw * z) / 2.0, y: ah / 2.0 - page_cy * z });
+            st.set_pan(ScreenPt {
+                x: (aw - pw * z) / 2.0,
+                y: ah / 2.0 - page_cy * z,
+            });
         }
         self.area.queue_draw();
         self.schedule_rerender();
@@ -945,7 +1024,8 @@ fn make_texture(bytes: Vec<u8>, width: u32, height: u32) -> Option<gtk4::gdk::Te
     }
     let stride = (width * 4) as usize;
     let bytes = glib::Bytes::from_owned(bytes);
-    let tex = gtk4::gdk::MemoryTexture::new(w, h, gtk4::gdk::MemoryFormat::R8g8b8a8, &bytes, stride);
+    let tex =
+        gtk4::gdk::MemoryTexture::new(w, h, gtk4::gdk::MemoryFormat::R8g8b8a8, &bytes, stride);
     Some(tex.upcast())
 }
 
@@ -994,7 +1074,13 @@ fn draw_overlay(
                 let sc = v.page_to_screen(c);
                 halo_line(cr, sa, sc, COL_DIM, 2.5, false);
                 dot(cr, sa, COL_DIM);
-                pill(widget, cr, sc.x + 16.0, sc.y - 16.0, &app.format_len(a.distance(&c)));
+                pill(
+                    widget,
+                    cr,
+                    sc.x + 16.0,
+                    sc.y - 16.0,
+                    &app.format_len(a.distance(&c)),
+                );
             }
         }
         Tool::SetScale => {
@@ -1027,7 +1113,14 @@ fn draw_overlay(
 }
 
 /// A line with a dark casing/halo underneath so it reads on any PDF background.
-fn halo_line(cr: &gtk4::cairo::Context, a: ScreenPt, b: ScreenPt, c: (f64, f64, f64), w: f64, dashed: bool) {
+fn halo_line(
+    cr: &gtk4::cairo::Context,
+    a: ScreenPt,
+    b: ScreenPt,
+    c: (f64, f64, f64),
+    w: f64,
+    dashed: bool,
+) {
     cr.move_to(a.x, a.y);
     cr.line_to(b.x, b.y);
     cr.set_dash(&[], 0.0);

@@ -47,7 +47,10 @@ fn clipped_region_is_smaller_and_offset() {
         .render_region(0, 2.0, (0.0, 0.0, pw / 2.0, ph / 2.0))
         .unwrap();
     assert!(quarter.width < full.width && quarter.height < full.height);
-    assert_eq!(quarter.bytes.len(), (quarter.width * quarter.height * 4) as usize);
+    assert_eq!(
+        quarter.bytes.len(),
+        (quarter.width * quarter.height * 4) as usize
+    );
     // A region offset into the page reports a non-zero origin.
     let mid = b
         .render_region(0, 2.0, (pw / 2.0, ph / 2.0, pw, ph))
@@ -71,12 +74,18 @@ fn geometry_aligns_with_rendered_page_frame() {
             maxy = maxy.max(v.y);
         }
     }
-    assert!(minx > -5.0 && miny > -5.0, "geometry before origin: ({minx:.0},{miny:.0})");
+    assert!(
+        minx > -5.0 && miny > -5.0,
+        "geometry before origin: ({minx:.0},{miny:.0})"
+    );
     assert!(
         maxx < pw + 5.0 && maxy < ph + 5.0,
         "geometry past page: ({maxx:.0},{maxy:.0}) vs ({pw:.0},{ph:.0})"
     );
-    assert!(maxx - minx > pw * 0.5 && maxy - miny > ph * 0.5, "geometry too small");
+    assert!(
+        maxx - minx > pw * 0.5 && maxy - miny > ph * 0.5,
+        "geometry too small"
+    );
 }
 
 /// Optional smoke test against a real-world drawing: set `VERNIER_TEST_PDF`
@@ -90,5 +99,8 @@ fn real_world_pdf_smoke() {
     let b = MupdfBackend::open(&path).expect("open VERNIER_TEST_PDF");
     assert!(b.page_count() >= 1);
     let polylines = b.extract_geometry(0).unwrap();
-    assert!(!polylines.is_empty(), "no vector geometry on page 0 of {path}");
+    assert!(
+        !polylines.is_empty(),
+        "no vector geometry on page 0 of {path}"
+    );
 }

@@ -83,10 +83,7 @@ mod tests {
 
     #[test]
     fn polyline_exposes_vertices() {
-        let pl = Polyline(vec![
-            PagePt { x: 0.0, y: 0.0 },
-            PagePt { x: 1.0, y: 1.0 },
-        ]);
+        let pl = Polyline(vec![PagePt { x: 0.0, y: 0.0 }, PagePt { x: 1.0, y: 1.0 }]);
         assert_eq!(pl.vertices().len(), 2);
     }
 }

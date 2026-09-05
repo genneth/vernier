@@ -30,6 +30,8 @@ set -u
 
 DRIVER="${1:?usage: gui-verify.sh DRIVER.sh [WAIT_SECS]}"
 WAIT="${2:-3}"
+# Compositor layout; scripts/sway-headless.cfg is the fixed 1400×900 test layout.
+SWAY_CFG="${SWAY_CFG:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sway-headless.cfg}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="${APP:-$REPO/target/debug/vernier}"
 [ -x "$APP" ] || { echo "binary not found: $APP (cargo build first)"; exit 1; }
@@ -53,9 +55,17 @@ sleep 1
 /usr/libexec/at-spi2-registryd >"$RT/registryd.log" 2>&1 & PIDS+=($!)
 sleep 1
 
+# On a hybrid Intel+NVIDIA box wlroots may pick the NVIDIA render node, whose
+# EGL does not initialise headless; default to the first non-NVIDIA node.
+if [ -z "${WLR_RENDER_DRM_DEVICE:-}" ]; then
+    for node in /dev/dri/renderD*; do
+        vendor="$(cat "/sys/class/drm/$(basename "$node")/device/vendor" 2>/dev/null)"
+        if [ "$vendor" != "0x10de" ]; then export WLR_RENDER_DRM_DEVICE="$node"; break; fi
+    done
+fi
 env -u WAYLAND_DISPLAY -u DISPLAY \
     WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=gles2 \
-    sway -c "$REPO/scripts/sway-headless.cfg" >"$RT/sway.log" 2>&1 & PIDS+=($!)
+    sway -c "$SWAY_CFG" >"$RT/sway.log" 2>&1 & PIDS+=($!)
 sleep 2.5
 WAYLAND_DISPLAY="$(cd "$RT" && ls | grep -m1 -E '^wayland-[0-9]+$')"
 export WAYLAND_DISPLAY

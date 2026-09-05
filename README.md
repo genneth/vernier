@@ -1,56 +1,59 @@
 # Vernier
 
-A native Linux desktop tool for **measuring and taking off quantities from PDF drawings**
-(architectural floor plans and other CAD-exported PDFs): render a page, **set a real-world scale**
-from one known dimension, then measure lengths with **CAD-style snapping** — the cursor locks onto
-the drawing's real vector geometry instead of eyeballed pixels.
+Measure lengths on PDF drawings, with the cursor snapping to the drawing's own
+vector geometry.
 
-![Measuring on a floor plan](packaging/screenshots/measure.png)
+![Measuring a wall on a floor plan](packaging/screenshots/measure.png)
 
-**Name:** after the **vernier scale** (Pierre Vernier, 1631) — the little sliding scale that lets a
-ruler read *precisely*. Precision measurement is the whole point.
+Architectural and engineering PDFs exported from CAD still contain the real
+line work. Vernier reads it, indexes every vertex, and snaps your clicks to
+them, so a measurement means the same thing it meant in the model rather than
+whatever pixel you happened to hit. Set the scale once, from the plot ratio
+printed on the sheet or from any dimension you already know, and read lengths
+in millimetres, metres, feet or inches.
 
-## Why
+The name is from the vernier scale, the sliding scale that lets a ruler be read
+precisely.
 
-PDF viewers and editors do measurement badly: their measure tools have **no snapping** and no fluid
-"set scale → measure" loop, so every takeoff is eyeballed pixel-clicking. CAD-exported PDFs carry
-the real line geometry inside the file — Vernier extracts it, indexes it, and snaps to it, so a
-measurement means the same thing it meant in the CAD model.
+## Use it
 
-## Features
+- **[Measure your first drawing](docs/tutorial.md)**: a short walk-through on the
+  sample plan.
+- **[Controls and readouts](docs/controls.md)**: every control, the scale syntax,
+  what the numbers mean.
 
-- Open a PDF; page navigation with a thumbnail sidebar.
-- Smooth pan/zoom, crisp at any magnification (pages re-render at the current zoom — never an
-  upscaled bitmap).
-- **Set scale** from a known dimension: click its two endpoints (snapped), type the real length
-  (`3000 mm`, `3 m`, `10 ft`), or enter a drawing ratio like `1:50` directly.
-- **Measure** two-point dimensions with vertex/endpoint snapping, on-page labels, and a live
-  readout in real units.
-- Written as a pure, headless, unit-tested Rust core with a thin GTK4/libadwaita shell —
-  see [docs/architecture.md](docs/architecture.md).
+Vernier is packaged as a Flatpak (`io.github.genneth.Vernier`) and is being
+submitted to Flathub; see [packaging](packaging/README.md) to build and install
+it locally in the meantime.
 
-## Build
+## Build from source
 
-Rust stable plus the GTK stack development libraries are required:
-GTK4 ≥ 4.14, libadwaita ≥ 1.5, and (for MuPDF's build) clang, fontconfig and freetype headers.
-On Fedora: `gtk4-devel libadwaita-devel clang-devel fontconfig-devel freetype-devel cmake`.
+Rust stable plus the GTK stack: GTK4 ≥ 4.14, libadwaita ≥ 1.5, and for MuPDF's
+build clang, cmake and the fontconfig and freetype headers. On Fedora:
+`gtk4-devel libadwaita-devel clang-devel cmake fontconfig-devel freetype-devel`.
 
 ```sh
 cargo build --release
-cargo run --release            # optionally: vernier <file.pdf>
-cargo test                     # headless core tests, incl. a synthetic PDF fixture
+cargo run --release -- drawing.pdf
+cargo test
 ```
 
-Flatpak packaging (the intended distribution route) lives in [`packaging/`](packaging/README.md).
+## Where things are
+
+- [`docs/`](docs/README.md): user guide, architecture, developer how-tos.
+- [`crates/core`](crates/core): the headless core (PDF, geometry, snapping,
+  scale, tools). [`crates/app`](crates/app): the GTK4/libadwaita shell.
+- [`packaging/`](packaging/README.md): Flatpak manifest, metainfo, release
+  procedure.
+- [`AGENTS.md`](AGENTS.md): working rules for contributors and coding agents.
 
 ## Status
 
-MVP: render → scale → snap-measure works end to end on real multi-thousand-segment floor plans.
-Planned next: areas/perimeters, counts, midpoint/intersection/perpendicular snaps, ortho lock,
-categories, CSV/annotated-PDF export, annotation persistence.
+Two-point length measurement with vertex snapping is complete and in daily use
+on multi-thousand-segment plans. Not yet: areas and perimeters, counts,
+midpoint and intersection snaps, saving measurements, export.
 
-## License
+## Licence
 
-**AGPL-3.0-or-later** (a consequence of rendering with [MuPDF](https://mupdf.com/), which is AGPL).
-The MuPDF dependency is isolated behind a single `PdfBackend` trait, so a differently-licensed
-backend could be swapped in without touching the rest of the app.
+AGPL-3.0-or-later. Vernier renders with [MuPDF](https://mupdf.com/), which is
+AGPL; that dependency is confined to one module (`crates/core/src/pdf`).

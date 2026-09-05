@@ -1,95 +1,162 @@
-# Vernier architecture
+# Architecture
 
-Vernier separates a **pure, headless core** (`crates/core`, unit-testable without GTK) from a thin
-GTK4/libadwaita shell (`crates/app`). Only the `ui` layer touches GTK; everything else is plain
-Rust, and that is where the real logic lives.
+This page explains how Vernier is put together and why. It is the place to
+read before changing the structure of the code. For what the app does from the
+user's side, see [controls](controls.md); for how to build and test it, see
+[AGENTS.md](../AGENTS.md).
 
-## Coordinate spaces (the crux)
+## One idea: a headless core under a thin shell
 
-Three spaces, enforced as distinct newtypes (`PagePt`, `ScreenPt`) so they cannot be mixed — this
-is the load-bearing invariant of the whole app:
+Vernier is two crates. `crates/core` (`vernier_core`) holds everything that
+can be reasoned about without a window: the PDF reader, the geometry, the snap
+index, the scale model, the tools and the application state. It has no GTK
+dependency and is tested headlessly. `crates/app` (`vernier`) is the GTK4 and
+libadwaita shell: it turns events into calls on the core and paints what the
+core says.
 
-1. **Page space** — PDF points, top-left origin, y-down. **All geometry is stored here.**
-2. **Screen space** — widget pixels. `screen = view · page`, where `view` = zoom scale + pan offset.
-3. **Real space** — mm / m / ft. `real = scale · page_length`, where
-   `scale = typed_length / measured_page_length` (real units per point).
+The split is not for reuse. It exists so that the interesting logic can be
+tested by calling functions, and so that every effect (drawing, threads,
+dialogs) lives in one crate where it is visible. The core never performs an
+effect; it is handed data and returns data.
 
-Snapping runs in **page space**. Flow per cursor sample: `screen → page` → snap → `page → screen`
-(draw) and `page → real` (readout).
+## Three coordinate spaces, kept apart by types
 
-## Modules
+Every quantity in Vernier lives in one of three spaces:
 
-- **`pdf`** — `PdfBackend` trait (`render_region`, `extract_geometry`) + the MuPDF implementation.
-  The trait isolates MuPDF (AGPL) so it could be swapped for a differently-licensed backend such as
-  pdfium — a one-module change. **No other module may call `mupdf` directly.**
-- **`geometry`** — domain types, the coordinate newtypes, curve→polyline flattening (`kurbo`);
-  produces the vertex set for snapping.
-- **`snap`** — `rstar` R-tree over vertices; `nearest_vertex(page_pt, radius_pt)`, where
-  `radius_pt = SNAP_PX / zoom` so the snap radius is constant in screen pixels.
-- **`scale`** — scale model; parses lengths (`"3000 mm"`, bare numbers default to mm, inches/feet)
-  and ratios (`1:50`); formats readouts.
-- **`view`** — view transform, `screen ↔ page` mapping, re-render-on-zoom policy (never upscale a
-  cached bitmap — crispness).
-- **`tools`** — interaction state machines (`SetScaleTool`, `MeasureTool`, shared
-  `SegmentBuilder`): pointer events + snap results in, overlay geometry + readout state out.
-- **`app`** — central headless state (document, page, view, scale, active tool, measurements) +
-  update loop; the GTK shell is a thin projection of this state.
-- **`ui`** (in `crates/app`) — gtk4/libadwaita window, canvas widget, thumbnail sidebar, readout.
+- **Page space**: PDF points (1/72 inch), origin top-left, y down. All geometry
+  and all dimensions are stored here. Types: `PagePt`, `PageLen`, `PageRect`,
+  `PageSize`.
+- **Screen space**: logical pixels in the canvas widget. Types: `ScreenPt`,
+  `ScreenRect`.
+- **Real space**: millimetres, metres, feet or inches. Type: `RealLen`, which
+  carries its `Unit`.
 
-## Data flow
+The `View` maps page to screen (`screen = page · zoom + pan`) and back. The
+`Scale` maps page lengths to real lengths (`real = units_per_point · page`).
+Nothing else converts between spaces, and because the types differ the compiler
+rejects a page radius compared with a screen distance or a bare number passed
+where a length is meant.
 
-```
-open file ──▶ pdf.load
-                │
-   ┌────────────┴───────────────┐
-   ▼                            ▼
-extract_geometry            render_region(page, view.matrix)
-   │ flatten (kurbo)            │
-   ▼                            ▼
-snap.build (rstar R-tree)   GdkMemoryTexture ──▶ canvas
+Snapping runs in page space: the pointer is mapped screen to page, snapped to
+the nearest vertex within a radius that is fixed in screen pixels (so it is
+divided by the zoom), and the result is mapped back for drawing and through the
+scale for the readout.
 
-pointer-move: screen→page ─▶ snap.nearest_vertex ─▶ tool.preview ─▶ readout
-click:        tool consumes snapped point (add vertex / set scale endpoint)
-pan:          translate cached texture (no re-render)
-zoom:         recompute view; re-render region async ─▶ new texture
-```
+## Modules of the core
 
-## Rendering
+- `pdf`: the only module that touches MuPDF. `MupdfBackend` opens a file,
+  reports page sizes, extracts every stroked or filled path as flattened
+  polylines in page space (applying each path's transform, so geometry and
+  raster agree), and renders a page-space rectangle at a given scale by
+  replaying a cached display list with a scissor. It hands out plain data
+  (`Rgba`, `Polyline`), never a MuPDF type. MuPDF is AGPL, which is why
+  Vernier is AGPL; keeping it in one module is what would make a different
+  renderer a bounded change.
+- `geometry`: the space newtypes above, polylines, curve flattening (`kurbo`)
+  and the point-to-segment distance.
+- `snap`: an R-tree (`rstar`) over all vertices; `nearest_vertex(point, radius)`.
+- `scale`: `Unit`, `RealLen`, `Scale`, and the parsers for lengths (`"3000 mm"`,
+  bare numbers are millimetres) and ratios (`"1:50"`, `"50"`). Both `Scale`
+  constructors refuse zero or non-finite inputs, so a `Scale` that exists is
+  always usable.
+- `view`: `View`, its two mappings, and the pure view arithmetic the shell
+  needs (fit page, fit width, zoom about an anchor, pan), including the zoom
+  limits.
+- `tools`: `SegmentBuilder` is the one primitive, "two clicks make a segment".
+  `Dimensions` (measuring) and `SetScaleTool` (calibration) are both built on
+  it, which is why they behave identically. Each committed `Dimension` has a
+  `DimId` that is never reused, so hover state and label rectangles refer to
+  dimensions by identity rather than by position in a list.
+- `app`: `AppState`, the single mutable object. It owns the view, the scale,
+  the snap index, the active tool and the dimensions, and exposes
+  `on_pointer_move`, `on_click`, `cancel` and the rest. The shell reads it to
+  draw and writes to it in response to input.
 
-GTK4 is a retained GPU scene graph, so the canvas presents a **`GdkMemoryTexture`** (GPU-cached;
-pan = transform, zoom = new texture) plus a small `append_cairo` overlay node — **not** a per-frame
-Cairo `DrawingArea` blit, which re-uploads every frame. Only the visible viewport region is
-rasterised, bounding zoom cost; a coarse full-page preview covers exposure during pans, and
-per-page display lists are cached.
+One piece of information flows the wrong way: the core cannot measure text, so
+the shell reports the screen rectangle of every dimension's label after each
+draw (`set_label_rects`), keyed by `DimId`, and the core uses them in its hover
+test. That is the only thing the core learns from the drawing pass.
 
-## Threading
+## The shell
 
-MuPDF `render_region` / `extract_geometry` run on a worker thread; results are posted to the GTK
-main context. The main thread never blocks on MuPDF, so pan/zoom stay smooth. Extraction is
-one-shot per page; render-on-zoom is the recurring async job, debounced during active scroll.
+`crates/app/src/ui` has four files with distinct jobs:
 
-## Error handling
+- `render.rs`: a worker thread that owns the `MupdfBackend`, which is not
+  `Send`. The main thread sends it `Req` values (open, geometry, render,
+  preview, thumbnail) and receives `Resp` values. Both are plain enums, so the
+  whole protocol is readable in one place. Within a queued batch only the
+  newest render request is served, thumbnails wait until the queue is idle,
+  and every result carries the document id or page generation it belongs to so
+  the receiver can drop stale ones.
+- `page_view.rs`: the canvas widget. GTK4 is a retained scene graph, so
+  `snapshot()` appends the page as GPU textures placed under the current view
+  transform (pan and zoom therefore cost nothing on the CPU), then appends one
+  Cairo node for the overlay. It layers white paper, a soft whole-page preview
+  and the crisp viewport texture so a pan never shows a hole.
+- `overlay.rs`: pure Cairo drawing of dimensions, calibration, labels, the ×
+  badge and the snap marker. It returns what it painted (`Painted`) for
+  hit-testing.
+- `canvas.rs`: `PdfCanvas`, the controller. It owns the view policy (fit
+  modes, debounced re-render after zoom or pan, skipping renders when the
+  viewport is already covered) and reports everything the window needs as a
+  `CanvasEvent`. The window handles those in one `match`.
 
-- `Result` through the core; `ui` surfaces failures as dialogs/toasts — never panics.
-- A page with no vector geometry (e.g. a scan) still renders, with a non-blocking notice that
+`mod.rs` builds the window and wires GTK controllers to `AppState` and
+`PdfCanvas`. It holds no measuring logic.
+
+### Rendering policy
+
+Only the visible region (plus a margin) is rasterised, at exactly the current
+zoom, so crispness never depends on upscaling a bitmap and cost is bounded by
+the viewport rather than the page. A render is requested 90 ms after the last
+zoom or pan event. MuPDF returns RGBA; the texture is created as
+`R8g8b8a8` to match, with no conversion.
+
+## Guarantees under failure
+
+- The core returns `Result` or `Option` for anything that can fail and never
+  panics on user input. The fixture tests cover a missing file and an
+  out-of-range page.
+- Every error from the render thread is a `Resp::Error` with a user-facing
+  sentence; the window shows it as a toast and logs the detail. If the render
+  thread dies, the next request or the closed response channel raises the same
+  toast ("The rendering thread stopped; reopen the file") rather than leaving
+  the window silently frozen.
+- A page with no vector geometry renders and can be measured; a toast says
   snapping is unavailable.
-- Measuring before a scale is set shows page-points with a "set scale" prompt rather than blocking.
+- Before a scale is set, lengths are shown in points, so a measurement is
+  never hidden, only unconverted.
+- Results for a page or document that is no longer current are discarded, so a
+  slow render can never paint the wrong page.
+- Dimensions are per page and per session. There is no persistence, so there
+  is nothing to corrupt.
 
 ## Testing
 
-- The core modules are unit-tested headless.
-- `crates/core/tests/pdf_fixture.rs` exercises the full MuPDF chain against a **committed
-  synthetic vector fixture** (`tests/fixtures/plan.pdf`, regenerable via `make_fixture.py`);
-  set `VERNIER_TEST_PDF=<file>` to also smoke-test extraction on a real drawing.
-- The GTK shell can be driven headlessly over the AT-SPI accessibility tree, on its real Wayland
-  rendering path — see [`scripts/gui-verify.sh`](../scripts/gui-verify.sh) (headless sway + grim +
-  `scripts/atspi_tool.py`; worked example in `scripts/examples/measure-flow.sh`).
+Unit tests sit beside the code. Where an invariant can be stated for all
+inputs it is a `proptest` property rather than an example: the view round trip,
+zooming about an anchor leaves the anchor fixed, the R-tree agrees with a
+brute-force nearest vertex, the hover test agrees with brute-force segment
+distance, a formatted length parses back, delete then restore is the identity.
 
-## Proven `mupdf` 0.7 crate notes
+`crates/core/tests/pdf_fixture.rs` runs the MuPDF chain on a committed
+synthetic plan (`tests/fixtures/plan.pdf`, generated by `make_fixture.py`),
+including the check that extracted geometry lands in the rendered page frame.
+`VERNIER_TEST_PDF=<file>` adds a smoke test on a real drawing.
 
-- `Device::from_native(dev)` and `Path::walk(walker)` **consume by value** and give no accessor
-  back — share counters/results via `Rc<RefCell<…>>` or a channel between device and walker.
-- Apply the path **CTM** when extracting geometry, so geometry lands in the same `[0,0,pw,ph]`
-  frame as the render — else snapping is offset (regression-tested in the fixture tests).
-- MuPDF emits **RGBA**; GTK's native format is BGRA-premultiplied — pick the matching
-  `GdkMemoryFormat` when wrapping the pixmap buffer (or convert).
+`crates/app/tests/packaging_consistency.rs` makes the build fail if the
+version in `Cargo.toml` and the newest release in the metainfo disagree, or if
+the packaging files name a different app id.
+
+The GTK window is verified without a person present by driving it over the
+accessibility tree under a headless compositor; see
+[headless GUI testing](headless-gui-testing.md).
+
+## Notes on the `mupdf` crate (0.7)
+
+- `Device::from_native` and `Path::walk` consume their argument and return
+  nothing useful, so results are shared through `Rc<RefCell<_>>`.
+- Path coordinates are path-local; multiply by the CTM the device callback
+  gives you, or the snap geometry is offset from the render. The fixture test
+  `geometry_aligns_with_rendered_page_frame` guards this.
+- `Document` is `!Send`; hence the owning render thread.

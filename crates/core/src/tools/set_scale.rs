@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use crate::geometry::PagePt;
-use crate::scale::{Scale, Unit};
+use crate::scale::{RealLen, Scale};
 use crate::tools::segment::SegmentBuilder;
 
 /// Picks two points whose real-world length the user then types, to derive the
@@ -37,11 +37,11 @@ impl SetScaleTool {
         self.pair.is_some()
     }
 
-    pub fn finish(&self, real_len: f64, unit: Unit) -> Option<Scale> {
-        self.pair.and_then(|(a, b)| {
-            let d = a.distance(&b);
-            (d > 0.0).then(|| Scale::from_measurement(d, real_len, unit))
-        })
+    /// The scale implied by the pair and the typed real length. `None` until a
+    /// pair is placed, or if the pair is degenerate (zero page length).
+    pub fn finish(&self, real: RealLen) -> Option<Scale> {
+        let (a, b) = self.pair?;
+        Scale::from_measurement(a.distance(&b), real)
     }
 
     pub fn clear(&mut self) {
@@ -53,6 +53,8 @@ impl SetScaleTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::PageLen;
+    use crate::scale::Unit;
     fn p(x: f64, y: f64) -> PagePt {
         PagePt { x, y }
     }
@@ -64,8 +66,8 @@ mod tests {
         assert!(!t.is_ready());
         t.add_point(p(100.0, 0.0));
         assert!(t.is_ready());
-        let s = t.finish(3000.0, Unit::Mm).unwrap();
-        assert_eq!(s.apply(100.0), 3000.0);
+        let s = t.finish(RealLen::new(3000.0, Unit::Mm)).unwrap();
+        assert_eq!(s.apply(PageLen(100.0)).value, 3000.0);
     }
 
     #[test]
@@ -73,6 +75,15 @@ mod tests {
         let mut t = SetScaleTool::new();
         t.add_point(p(0.0, 0.0));
         assert!(!t.is_ready());
-        assert!(t.finish(1.0, Unit::Mm).is_none());
+        assert!(t.finish(RealLen::new(1.0, Unit::Mm)).is_none());
+    }
+
+    #[test]
+    fn coincident_points_give_no_scale() {
+        let mut t = SetScaleTool::new();
+        t.add_point(p(4.0, 4.0));
+        t.add_point(p(4.0, 4.0));
+        assert!(t.is_ready());
+        assert!(t.finish(RealLen::new(1.0, Unit::Mm)).is_none());
     }
 }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-use vernier_core::pdf::{mupdf_backend::MupdfBackend, PdfBackend};
+use vernier_core::geometry::PageRect;
+use vernier_core::pdf::MupdfBackend;
 
 /// Synthetic two-page vector "floor plan", committed to the repo.
 /// Regenerate with `tests/fixtures/make_fixture.py`.
@@ -11,9 +12,29 @@ fn backend() -> MupdfBackend {
     MupdfBackend::open(&fixture_path()).expect("open fixture")
 }
 
+fn full(b: &MupdfBackend, page: usize) -> PageRect {
+    let s = b.page_size(page).unwrap();
+    PageRect {
+        x0: 0.0,
+        y0: 0.0,
+        x1: s.w,
+        y1: s.h,
+    }
+}
+
 #[test]
 fn page_count_is_two() {
-    assert_eq!(backend().page_count(), 2);
+    assert_eq!(backend().page_count().unwrap(), 2);
+}
+
+#[test]
+fn missing_file_is_an_error_not_a_panic() {
+    assert!(MupdfBackend::open("/nonexistent/plan.pdf").is_err());
+}
+
+#[test]
+fn out_of_range_page_is_an_error_not_a_panic() {
+    assert!(backend().page_size(99).is_err());
 }
 
 #[test]
@@ -30,8 +51,7 @@ fn extracts_substantial_geometry_from_page0() {
 #[test]
 fn renders_page0_to_rgba() {
     let b = backend();
-    let (pw, ph) = b.page_size_pts(0);
-    let img = b.render_region(0, 2.0, (0.0, 0.0, pw, ph)).unwrap();
+    let img = b.render_region(0, 2.0, full(&b, 0)).unwrap();
     assert_eq!(img.bytes.len(), (img.width * img.height * 4) as usize);
     assert!(img.width > 1000 && img.height > 1000);
     assert_eq!(img.scale, 2.0);
@@ -40,22 +60,40 @@ fn renders_page0_to_rgba() {
 #[test]
 fn clipped_region_is_smaller_and_offset() {
     let b = backend();
-    let (pw, ph) = b.page_size_pts(0);
-    let full = b.render_region(0, 2.0, (0.0, 0.0, pw, ph)).unwrap();
+    let page = full(&b, 0);
+    let whole = b.render_region(0, 2.0, page).unwrap();
     // Render just the top-left quarter.
     let quarter = b
-        .render_region(0, 2.0, (0.0, 0.0, pw / 2.0, ph / 2.0))
+        .render_region(
+            0,
+            2.0,
+            PageRect {
+                x0: 0.0,
+                y0: 0.0,
+                x1: page.x1 / 2.0,
+                y1: page.y1 / 2.0,
+            },
+        )
         .unwrap();
-    assert!(quarter.width < full.width && quarter.height < full.height);
+    assert!(quarter.width < whole.width && quarter.height < whole.height);
     assert_eq!(
         quarter.bytes.len(),
         (quarter.width * quarter.height * 4) as usize
     );
     // A region offset into the page reports a non-zero origin.
     let mid = b
-        .render_region(0, 2.0, (pw / 2.0, ph / 2.0, pw, ph))
+        .render_region(
+            0,
+            2.0,
+            PageRect {
+                x0: page.x1 / 2.0,
+                y0: page.y1 / 2.0,
+                x1: page.x1,
+                y1: page.y1,
+            },
+        )
         .unwrap();
-    assert!(mid.origin.0 > 0.0 && mid.origin.1 > 0.0);
+    assert!(mid.origin.x > 0.0 && mid.origin.y > 0.0);
 }
 
 #[test]
@@ -63,7 +101,7 @@ fn geometry_aligns_with_rendered_page_frame() {
     // Extracted geometry must live in the same [0,0,pw,ph] frame as the render
     // (CTM applied), not in centred/raw path space — else snapping is offset.
     let b = backend();
-    let (pw, ph) = b.page_size_pts(0);
+    let size = b.page_size(0).unwrap();
     let polylines = b.extract_geometry(0).unwrap();
     let (mut minx, mut miny, mut maxx, mut maxy) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for pl in &polylines {
@@ -79,11 +117,13 @@ fn geometry_aligns_with_rendered_page_frame() {
         "geometry before origin: ({minx:.0},{miny:.0})"
     );
     assert!(
-        maxx < pw + 5.0 && maxy < ph + 5.0,
-        "geometry past page: ({maxx:.0},{maxy:.0}) vs ({pw:.0},{ph:.0})"
+        maxx < size.w + 5.0 && maxy < size.h + 5.0,
+        "geometry past page: ({maxx:.0},{maxy:.0}) vs ({:.0},{:.0})",
+        size.w,
+        size.h
     );
     assert!(
-        maxx - minx > pw * 0.5 && maxy - miny > ph * 0.5,
+        maxx - minx > size.w * 0.5 && maxy - miny > size.h * 0.5,
         "geometry too small"
     );
 }
@@ -97,7 +137,7 @@ fn real_world_pdf_smoke() {
         return;
     };
     let b = MupdfBackend::open(&path).expect("open VERNIER_TEST_PDF");
-    assert!(b.page_count() >= 1);
+    assert!(b.page_count().unwrap() >= 1);
     let polylines = b.extract_geometry(0).unwrap();
     assert!(
         !polylines.is_empty(),

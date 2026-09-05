@@ -2,3 +2,9 @@
 resolver = "2"
 members = ["crates/core", "crates/app"]
 exclude = ["scratch"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/genneth/vernier"

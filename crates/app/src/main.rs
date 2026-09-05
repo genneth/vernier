@@ -20,7 +20,7 @@ fn main() -> glib::ExitCode {
 
     // HANDLES_OPEN so the app can be launched with a PDF ("Open with…").
     let app = adw::Application::builder()
-        .application_id("io.github.genneth.Vernier")
+        .application_id(ui::APP_ID)
         .flags(gio::ApplicationFlags::HANDLES_OPEN)
         .build();
     app.connect_activate(|app| ui::build_window(app, None));

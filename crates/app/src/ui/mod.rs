@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+//! The GTK4/libadwaita window: header bar, page sidebar, the canvas and its
+//! input controllers, and the scale/zoom popovers. This module wires widgets
+//! to `AppState` and `PdfCanvas`; it holds no measuring logic of its own.
 mod canvas;
+mod overlay;
+mod page_view;
+mod render;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -9,11 +15,12 @@ use gtk4::gio;
 use libadwaita as adw;
 use vernier_core::app::{AppState, Tool};
 use vernier_core::geometry::ScreenPt;
-use vernier_core::scale::{self, Scale, Unit};
+use vernier_core::scale::{self, RealLen, Scale, Unit};
+use vernier_core::tools::dimension::Dimension;
 
-use canvas::PdfCanvas;
+use canvas::{CanvasEvent, PdfCanvas};
 
-const UNITS: [Unit; 4] = [Unit::Mm, Unit::M, Unit::Ft, Unit::In];
+pub const APP_ID: &str = "io.github.genneth.Vernier";
 
 pub fn build_window(app: &adw::Application, open_path: Option<String>) {
     let state = Rc::new(RefCell::new(AppState::new()));
@@ -36,6 +43,7 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
     // ---- header end: primary menu + Set scale ----
     let menu = gio::Menu::new();
     menu.append(Some("Clear Measurements"), Some("win.clear"));
+    menu.append(Some("Keyboard Shortcuts"), Some("win.shortcuts"));
     menu.append(Some("About Vernier"), Some("win.about"));
     let menu_btn = gtk4::MenuButton::new();
     menu_btn.set_icon_name("open-menu-symbolic");
@@ -46,11 +54,10 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
     let scale_btn = gtk4::MenuButton::new();
     scale_btn.set_label("Set scale");
     scale_btn.update_property(&[gtk4::accessible::Property::Label("Set scale")]);
-    let (scale_pop, ratio_entry, ratio_apply, len_entry, unit_dd, len_apply, pick_btn) =
-        build_scale_popover();
+    let scale_pop = ScalePopover::build();
     // Stays open while you click points on the canvas.
-    scale_pop.set_autohide(false);
-    scale_btn.set_popover(Some(&scale_pop));
+    scale_pop.popover.set_autohide(false);
+    scale_btn.set_popover(Some(&scale_pop.popover));
     header.pack_end(&scale_btn);
 
     // ---- header end: zoom control [-] [NN% v] [+] ----
@@ -79,11 +86,6 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
     {
         let cb = canvas.clone();
         zoom_in_btn.connect_clicked(move |_| cb.zoom_in());
-    }
-    {
-        // Keep the readout in sync with the live zoom level / fit mode.
-        let zb = zoom_label_btn.clone();
-        canvas.set_zoom_listener(move |label| zb.set_label(&label));
     }
 
     // ---- thumbnail sidebar in an overlay split view ----
@@ -137,31 +139,59 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
     // Thumbnails, kept so each arrival can fill the right slot.
     let thumb_pics: Rc<RefCell<Vec<gtk4::Picture>>> = Rc::new(RefCell::new(Vec::new()));
 
-    // On open: rebuild the sidebar with one row per page; auto-show if multipage.
+    // Everything the canvas reports, handled in one place.
     {
         let lb = sidebar_list.clone();
         let pics = thumb_pics.clone();
         let split = split.clone();
-        canvas.set_doc_listener(move |count| {
-            while let Some(row) = lb.row_at_index(0) {
-                lb.remove(&row);
+        let wt = window_title.clone();
+        let zb = zoom_label_btn.clone();
+        let toasts = toasts.clone();
+        canvas.set_handler(move |ev| match ev {
+            CanvasEvent::DocumentOpened { page_count } => {
+                while let Some(row) = lb.row_at_index(0) {
+                    lb.remove(&row);
+                }
+                pics.borrow_mut().clear();
+                for page in 0..page_count {
+                    let (row, pic) = make_thumb_row(page);
+                    lb.append(&row);
+                    pics.borrow_mut().push(pic);
+                }
+                split.set_show_sidebar(page_count > 1);
             }
-            pics.borrow_mut().clear();
-            for page in 0..count {
-                let (row, pic) = make_thumb_row(page);
-                lb.append(&row);
-                pics.borrow_mut().push(pic);
+            CanvasEvent::Thumbnail { page, texture } => {
+                if let Some(pic) = pics.borrow().get(page) {
+                    pic.set_paintable(Some(&texture));
+                }
             }
-            split.set_show_sidebar(count > 1);
-        });
-    }
-
-    // Fill each thumbnail texture as it arrives from the render thread.
-    {
-        let pics = thumb_pics.clone();
-        canvas.set_thumb_listener(move |page, tex| {
-            if let Some(pic) = pics.borrow().get(page) {
-                pic.set_paintable(Some(&tex));
+            CanvasEvent::PageChanged {
+                doc_name,
+                index,
+                count,
+            } => {
+                wt.set_title(if doc_name.is_empty() {
+                    "Vernier"
+                } else {
+                    &doc_name
+                });
+                wt.set_subtitle(&format!("Page {} of {}", index + 1, count));
+                if let Some(row) = lb.row_at_index(index as i32) {
+                    lb.select_row(Some(&row));
+                }
+            }
+            CanvasEvent::ZoomChanged { label } => zb.set_label(&label),
+            CanvasEvent::GeometryLoaded { vertex_count } => {
+                if vertex_count == 0 {
+                    toasts.add_toast(adw::Toast::new(
+                        "No vector geometry on this page, so snapping is unavailable",
+                    ));
+                }
+            }
+            CanvasEvent::Error { what, .. } => {
+                let toast = adw::Toast::new(&what);
+                toast.set_priority(adw::ToastPriority::High);
+                toasts.add_toast(toast);
             }
         });
     }
@@ -177,19 +207,6 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
         });
     }
 
-    // Title + current-page highlight follow the active page.
-    {
-        let wt = window_title.clone();
-        let lb = sidebar_list.clone();
-        canvas.set_page_listener(move |name, idx, count| {
-            wt.set_title(if name.is_empty() { "Vernier" } else { name });
-            wt.set_subtitle(&format!("Page {} of {}", idx + 1, count));
-            if let Some(row) = lb.row_at_index(idx as i32) {
-                lb.select_row(Some(&row));
-            }
-        });
-    }
-
     let content = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
     content.append(&header);
     content.append(&split);
@@ -198,27 +215,30 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
     {
         let canvas = canvas.clone();
         open_btn.connect_clicked(move |_| {
+            // The headless harness has no portal to answer a file dialog.
             if let Ok(path) = std::env::var("VERNIER_AUTO_OPEN") {
-                if let Err(e) = canvas.open(&path) {
-                    tracing::error!("open failed: {e}");
-                }
+                canvas.open(&path);
                 return;
             }
-            let dialog = gtk4::FileDialog::builder().title("Open PDF").build();
+            let filter = gtk4::FileFilter::new();
+            filter.add_mime_type("application/pdf");
+            filter.set_name(Some("PDF drawings"));
+            let filters = gio::ListStore::new::<gtk4::FileFilter>();
+            filters.append(&filter);
+            let dialog = gtk4::FileDialog::builder()
+                .title("Open PDF")
+                .filters(&filters)
+                .default_filter(&filter)
+                .build();
             let canvas = canvas.clone();
-            dialog.open(
-                None::<&gtk4::Window>,
-                gtk4::gio::Cancellable::NONE,
-                move |res| {
-                    if let Ok(file) = res {
-                        if let Some(path) = file.path() {
-                            if let Err(e) = canvas.open(&path.to_string_lossy()) {
-                                tracing::error!("open failed: {e}");
-                            }
-                        }
+            let parent = canvas.area.root().and_downcast::<gtk4::Window>();
+            dialog.open(parent.as_ref(), gio::Cancellable::NONE, move |res| {
+                if let Ok(file) = res {
+                    if let Some(path) = file.path() {
+                        canvas.open(&path.to_string_lossy());
                     }
-                },
-            );
+                }
+            });
         });
     }
 
@@ -241,6 +261,13 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
             }
             cb.area.queue_draw();
         });
+        {
+            let cb = canvas.clone();
+            motion.connect_leave(move |_| {
+                cb.state.borrow_mut().on_pointer_leave();
+                cb.area.queue_draw();
+            });
+        }
         canvas.area.add_controller(motion);
     }
 
@@ -252,22 +279,21 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
         let click = gtk4::GestureClick::new();
         click.set_button(gtk4::gdk::BUTTON_PRIMARY);
         click.connect_pressed(move |_, _, x, y| {
-            if let Some((rx, ry, rw, rh)) = cb.area.close_rect() {
-                if x >= rx && x <= rx + rw && y >= ry && y <= ry + rh {
-                    delete_hovered(&cb, &toasts);
-                    return;
-                }
+            let sp = ScreenPt { x, y };
+            if cb.area.close_rect().is_some_and(|r| r.contains(sp)) {
+                delete_hovered(&cb, &toasts);
+                return;
             }
             {
                 let mut st = cb.state.borrow_mut();
                 let tool = st.active_tool();
-                st.on_click(ScreenPt { x, y });
+                st.on_click(sp);
                 match tool {
                     Tool::Measure => {
                         if st.dimensions().pending().is_some() {
                             tracing::info!("dimension started");
-                        } else if let Some((a, b)) = st.dimensions().committed().last() {
-                            tracing::info!("dimension placed: {}", st.format_len(a.distance(b)));
+                        } else if let Some(d) = st.dimensions().committed().last() {
+                            tracing::info!("dimension placed: {}", st.format_len(d.length()));
                         }
                     }
                     Tool::SetScale => {
@@ -343,53 +369,60 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
     // Ratio: "1 : N" -> Scale::from_ratio (uses the chosen display unit).
     {
         let cb = canvas.clone();
-        let entry = ratio_entry.clone();
-        let dd = unit_dd.clone();
-        let pop = scale_pop.clone();
+        let toasts = toasts.clone();
+        let sp = scale_pop.clone();
         let apply: Rc<dyn Fn()> = Rc::new(move || {
-            if let Some(r) = scale::parse_ratio(entry.text().as_str()) {
-                let unit = UNITS[dd.selected() as usize];
-                cb.state.borrow_mut().set_scale(Scale::from_ratio(r, unit));
-                tracing::info!("scale set from ratio 1:{r} ({})", unit.suffix());
-                pop.popdown();
-                cb.area.queue_draw();
-            } else {
-                tracing::warn!("could not parse ratio {:?}", entry.text());
+            let text = sp.ratio_entry.text();
+            match scale::parse_ratio(text.as_str()).and_then(|r| Scale::from_ratio(r, sp.unit())) {
+                Some(s) => {
+                    cb.state.borrow_mut().set_scale(s);
+                    tracing::info!("scale set from ratio {text} ({})", s.unit().suffix());
+                    sp.popover.popdown();
+                    cb.area.queue_draw();
+                }
+                None => {
+                    tracing::warn!("could not parse ratio {text:?}");
+                    toasts.add_toast(adw::Toast::new("Enter a ratio like 50 (for 1:50)"));
+                }
             }
         });
         let f = apply.clone();
-        ratio_entry.connect_activate(move |_| f());
-        ratio_apply.connect_clicked(move |_| apply());
+        scale_pop.ratio_entry.connect_activate(move |_| f());
+        scale_pop.ratio_apply.connect_clicked(move |_| apply());
     }
     // Measured: length + unit dropdown -> Scale::from_measurement on the two points.
     {
         let cb = canvas.clone();
-        let entry = len_entry.clone();
-        let dd = unit_dd.clone();
-        let pop = scale_pop.clone();
-        let apply: Rc<dyn Fn()> = Rc::new(move || match entry.text().trim().parse::<f64>() {
-            Ok(val) => {
-                let unit = UNITS[dd.selected() as usize];
-                cb.state.borrow_mut().finish_set_scale(val, unit);
-                if cb.state.borrow().scale().is_some() {
-                    tracing::info!("scale set from measurement");
-                    pop.popdown();
-                } else {
-                    tracing::warn!("need two scale points before applying a length");
-                }
-                cb.area.queue_draw();
+        let toasts = toasts.clone();
+        let sp = scale_pop.clone();
+        let apply: Rc<dyn Fn()> = Rc::new(move || {
+            let text = sp.len_entry.text();
+            let Ok(value) = text.trim().parse::<f64>() else {
+                tracing::warn!("could not parse length {text:?}");
+                toasts.add_toast(adw::Toast::new("Enter the real length as a number"));
+                return;
+            };
+            let real = RealLen::new(value, sp.unit());
+            if cb.state.borrow_mut().finish_set_scale(real) {
+                tracing::info!("scale set from measurement");
+                sp.popover.popdown();
+            } else {
+                tracing::warn!("need two distinct scale points before applying a length");
+                toasts.add_toast(adw::Toast::new(
+                    "Pick two different points on the drawing first",
+                ));
             }
-            Err(_) => tracing::warn!("could not parse length {:?}", entry.text()),
+            cb.area.queue_draw();
         });
         let f = apply.clone();
-        len_entry.connect_activate(move |_| f());
-        len_apply.connect_clicked(move |_| apply());
+        scale_pop.len_entry.connect_activate(move |_| f());
+        scale_pop.len_apply.connect_clicked(move |_| apply());
     }
     // "Pick two points" is the explicit entry into measured calibration; the
     // ratio path applies directly without changing tools.
     {
         let cb = canvas.clone();
-        pick_btn.connect_clicked(move |_| {
+        scale_pop.pick_btn.connect_clicked(move |_| {
             cb.state.borrow_mut().begin_set_scale();
             cb.area.queue_draw();
         });
@@ -413,15 +446,24 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
     }
     window.add_action(&clear);
 
+    let shortcuts = gio::SimpleAction::new("shortcuts", None);
+    {
+        let win = window.clone();
+        shortcuts.connect_activate(move |_, _| build_shortcuts_dialog().present(Some(&win)));
+    }
+    window.add_action(&shortcuts);
+
     let about = gio::SimpleAction::new("about", None);
     {
         let win = window.clone();
         about.connect_activate(move |_, _| {
             let dialog = adw::AboutDialog::builder()
                 .application_name("Vernier")
-                .application_icon("io.github.genneth.Vernier")
+                .application_icon(APP_ID)
                 .version(env!("CARGO_PKG_VERSION"))
                 .developer_name("Gen Zhang")
+                .website("https://github.com/genneth/vernier")
+                .issue_url("https://github.com/genneth/vernier/issues")
                 .license_type(gtk4::License::Agpl30)
                 .comments("Measure and take off quantities from PDF drawings.")
                 .build();
@@ -457,96 +499,103 @@ pub fn build_window(app: &adw::Application, open_path: Option<String>) {
 
     // "Open with…" / file argument: open the PDF once the window is up.
     if let Some(path) = open_path {
-        if let Err(e) = canvas.open(&path) {
-            tracing::error!("open failed: {e}");
-        }
+        canvas.open(&path);
     }
 }
 
 /// The "Set scale" popover: a stated-ratio row and a measured-length row.
-#[allow(clippy::type_complexity)]
-fn build_scale_popover() -> (
-    gtk4::Popover,
-    gtk4::Entry,
-    gtk4::Button,
-    gtk4::Entry,
-    gtk4::DropDown,
-    gtk4::Button,
-    gtk4::Button,
-) {
-    let pop = gtk4::Popover::new();
-    let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
-    vbox.set_margin_top(12);
-    vbox.set_margin_bottom(12);
-    vbox.set_margin_start(12);
-    vbox.set_margin_end(12);
-
-    // Ratio row (applies directly).
-    let ratio_caption = gtk4::Label::new(Some("Set directly from the drawing scale"));
-    ratio_caption.add_css_class("dim-label");
-    ratio_caption.set_xalign(0.0);
-    let ratio_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
-    ratio_row.append(&gtk4::Label::new(Some("1 :")));
-    let ratio_entry = gtk4::Entry::new();
-    ratio_entry.set_placeholder_text(Some("50"));
-    ratio_entry.set_max_width_chars(6);
-    ratio_entry.update_property(&[gtk4::accessible::Property::Label("Scale ratio")]);
-    ratio_row.append(&ratio_entry);
-    let ratio_apply = gtk4::Button::with_label("Apply");
-    // A button's child label wins name computation via the labelled-by
-    // relation (ARIA precedence); clear it so the Label property applies.
-    ratio_apply.update_relation(&[gtk4::accessible::Relation::LabelledBy(&[])]);
-    ratio_apply.update_property(&[gtk4::accessible::Property::Label("Apply ratio")]);
-    ratio_row.append(&ratio_apply);
-
-    let sep = gtk4::Separator::new(gtk4::Orientation::Horizontal);
-
-    // Measured row (pick two points, then enter the real length).
-    let meas_caption = gtk4::Label::new(Some("Or measure a known dimension"));
-    meas_caption.add_css_class("dim-label");
-    meas_caption.set_xalign(0.0);
-    let pick_btn = gtk4::Button::with_label("Pick two points on the drawing");
-    pick_btn.update_relation(&[gtk4::accessible::Relation::LabelledBy(&[])]);
-    pick_btn.update_property(&[gtk4::accessible::Property::Label("Pick two points")]);
-    let meas_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
-    let len_entry = gtk4::Entry::new();
-    len_entry.set_placeholder_text(Some("3000"));
-    len_entry.set_max_width_chars(8);
-    len_entry.update_property(&[gtk4::accessible::Property::Label("Scale length")]);
-    let unit_dd = gtk4::DropDown::from_strings(&["mm", "m", "ft", "in"]);
-    meas_row.append(&len_entry);
-    meas_row.append(&unit_dd);
-    let len_apply = gtk4::Button::with_label("Apply");
-    len_apply.update_relation(&[gtk4::accessible::Relation::LabelledBy(&[])]);
-    len_apply.update_property(&[gtk4::accessible::Property::Label("Apply length")]);
-    meas_row.append(&len_apply);
-
-    vbox.append(&ratio_caption);
-    vbox.append(&ratio_row);
-    vbox.append(&sep);
-    vbox.append(&meas_caption);
-    vbox.append(&pick_btn);
-    vbox.append(&meas_row);
-    pop.set_child(Some(&vbox));
-    (
-        pop,
-        ratio_entry,
-        ratio_apply,
-        len_entry,
-        unit_dd,
-        len_apply,
-        pick_btn,
-    )
+#[derive(Clone)]
+struct ScalePopover {
+    popover: gtk4::Popover,
+    ratio_entry: gtk4::Entry,
+    ratio_apply: gtk4::Button,
+    pick_btn: gtk4::Button,
+    len_entry: gtk4::Entry,
+    unit_dd: gtk4::DropDown,
+    len_apply: gtk4::Button,
 }
 
-/// Target display width (px) for sidebar thumbnails.
-const THUMB_W: i32 = 180;
+impl ScalePopover {
+    /// The unit chosen in the dropdown (rows are `Unit::ALL` in order).
+    fn unit(&self) -> Unit {
+        Unit::ALL[self.unit_dd.selected() as usize]
+    }
+
+    fn build() -> ScalePopover {
+        let pop = gtk4::Popover::new();
+        let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+        vbox.set_margin_top(12);
+        vbox.set_margin_bottom(12);
+        vbox.set_margin_start(12);
+        vbox.set_margin_end(12);
+
+        // Ratio row (applies directly).
+        let ratio_caption = gtk4::Label::new(Some("Set directly from the drawing scale"));
+        ratio_caption.add_css_class("dim-label");
+        ratio_caption.set_xalign(0.0);
+        let ratio_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+        ratio_row.append(&gtk4::Label::new(Some("1 :")));
+        let ratio_entry = gtk4::Entry::new();
+        ratio_entry.set_placeholder_text(Some("50"));
+        ratio_entry.set_max_width_chars(6);
+        ratio_entry.update_property(&[gtk4::accessible::Property::Label("Scale ratio")]);
+        ratio_row.append(&ratio_entry);
+        let ratio_apply = gtk4::Button::with_label("Apply");
+        // A button's child label wins name computation via the labelled-by
+        // relation (ARIA precedence); clear it so the Label property applies.
+        ratio_apply.update_relation(&[gtk4::accessible::Relation::LabelledBy(&[])]);
+        ratio_apply.update_property(&[gtk4::accessible::Property::Label("Apply ratio")]);
+        ratio_row.append(&ratio_apply);
+
+        let sep = gtk4::Separator::new(gtk4::Orientation::Horizontal);
+
+        // Measured row (pick two points, then enter the real length).
+        let meas_caption = gtk4::Label::new(Some("Or measure a known dimension"));
+        meas_caption.add_css_class("dim-label");
+        meas_caption.set_xalign(0.0);
+        let pick_btn = gtk4::Button::with_label("Pick two points on the drawing");
+        pick_btn.update_relation(&[gtk4::accessible::Relation::LabelledBy(&[])]);
+        pick_btn.update_property(&[gtk4::accessible::Property::Label("Pick two points")]);
+        let meas_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+        let len_entry = gtk4::Entry::new();
+        len_entry.set_placeholder_text(Some("3000"));
+        len_entry.set_max_width_chars(8);
+        len_entry.update_property(&[gtk4::accessible::Property::Label("Scale length")]);
+        let unit_names: Vec<&str> = Unit::ALL.iter().map(Unit::suffix).collect();
+        let unit_dd = gtk4::DropDown::from_strings(&unit_names);
+        unit_dd.update_property(&[gtk4::accessible::Property::Label("Unit")]);
+        meas_row.append(&len_entry);
+        meas_row.append(&unit_dd);
+        let len_apply = gtk4::Button::with_label("Apply");
+        len_apply.update_relation(&[gtk4::accessible::Relation::LabelledBy(&[])]);
+        len_apply.update_property(&[gtk4::accessible::Property::Label("Apply length")]);
+        meas_row.append(&len_apply);
+
+        vbox.append(&ratio_caption);
+        vbox.append(&ratio_row);
+        vbox.append(&sep);
+        vbox.append(&meas_caption);
+        vbox.append(&pick_btn);
+        vbox.append(&meas_row);
+        pop.set_child(Some(&vbox));
+        ScalePopover {
+            popover: pop,
+            ratio_entry,
+            ratio_apply,
+            pick_btn,
+            len_entry,
+            unit_dd,
+            len_apply,
+        }
+    }
+}
 
 /// A sidebar row: a framed page thumbnail above its page number. The returned
 /// `Picture` starts empty and is filled once its render lands.
 fn make_thumb_row(page: usize) -> (gtk4::ListBoxRow, gtk4::Picture) {
     let pic = gtk4::Picture::new();
-    pic.set_size_request(THUMB_W, 224);
+    let w = render::THUMB_W as i32;
+    pic.set_size_request(w, w * 5 / 4);
     pic.set_content_fit(gtk4::ContentFit::Contain);
     pic.add_css_class("card");
     let label = gtk4::Label::new(Some(&format!("{}", page + 1)));
@@ -585,36 +634,23 @@ fn build_zoom_popover(canvas: &Rc<PdfCanvas>) -> gtk4::Popover {
         b
     };
 
-    let fit_page = mk("Fit Page");
-    let fit_width = mk("Fit Width");
-    let actual = mk("Actual Size (100%)");
-    {
+    // Each preset: (label, action). Data first, wiring once.
+    type Preset = (&'static str, fn(&Rc<PdfCanvas>));
+    let presets: [Preset; 3] = [
+        ("Fit Page", |c| c.fit_page()),
+        ("Fit Width", |c| c.fit_width()),
+        ("Actual Size (100%)", |c| c.zoom_actual()),
+    ];
+    for (label, act) in presets {
+        let b = mk(label);
         let cb = canvas.clone();
         let p = pop.clone();
-        fit_page.connect_clicked(move |_| {
-            cb.fit_page();
+        b.connect_clicked(move |_| {
+            act(&cb);
             p.popdown();
         });
+        vb.append(&b);
     }
-    {
-        let cb = canvas.clone();
-        let p = pop.clone();
-        fit_width.connect_clicked(move |_| {
-            cb.fit_width();
-            p.popdown();
-        });
-    }
-    {
-        let cb = canvas.clone();
-        let p = pop.clone();
-        actual.connect_clicked(move |_| {
-            cb.zoom_actual();
-            p.popdown();
-        });
-    }
-    vb.append(&fit_page);
-    vb.append(&fit_width);
-    vb.append(&actual);
     vb.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
 
     for pct in [50.0_f64, 75.0, 100.0, 150.0, 200.0] {
@@ -632,18 +668,68 @@ fn build_zoom_popover(canvas: &Rc<PdfCanvas>) -> gtk4::Popover {
     pop
 }
 
+/// The keyboard/mouse reference, reachable from the primary menu.
+fn build_shortcuts_dialog() -> adw::Dialog {
+    // (group, [(keys, description)]) — the same table as docs/controls.md.
+    const GROUPS: &[(&str, &[(&str, &str)])] = &[
+        (
+            "Measuring",
+            &[
+                (
+                    "Left click",
+                    "Place a point (snapped to the nearest vertex)",
+                ),
+                ("Escape", "Cancel the half-placed dimension or calibration"),
+                ("Right click", "Delete the dimension under the pointer"),
+            ],
+        ),
+        (
+            "View",
+            &[
+                ("Scroll wheel", "Zoom about the pointer"),
+                ("Middle drag", "Pan"),
+                ("Ctrl +  /  Ctrl −", "Zoom in / out"),
+                ("Ctrl 0", "Fit page"),
+                ("Page Up / Page Down", "Previous / next page"),
+            ],
+        ),
+    ];
+    let page = adw::PreferencesPage::new();
+    for (title, rows) in GROUPS {
+        let group = adw::PreferencesGroup::new();
+        group.set_title(title);
+        for (keys, desc) in rows.iter() {
+            let row = adw::ActionRow::new();
+            row.set_title(desc);
+            let k = gtk4::Label::new(Some(keys));
+            k.add_css_class("dim-label");
+            row.add_suffix(&k);
+            group.add(&row);
+        }
+        page.add(&group);
+    }
+    let toolbar = adw::ToolbarView::new();
+    toolbar.add_top_bar(&adw::HeaderBar::new());
+    toolbar.set_content(Some(&page));
+    let dialog = adw::Dialog::new();
+    dialog.set_title("Keyboard Shortcuts");
+    dialog.set_content_width(520);
+    dialog.set_child(Some(&toolbar));
+    dialog
+}
+
 /// Delete the hovered dimension (if any) and offer undo via a toast.
 fn delete_hovered(cb: &Rc<PdfCanvas>, toasts: &adw::ToastOverlay) {
-    let (seg, len) = {
+    let (dim, len): (Dimension, String) = {
         let mut st = cb.state.borrow_mut();
-        let Some(idx) = st.hovered_dimension() else {
+        let Some(id) = st.hovered_dimension() else {
             return;
         };
-        let Some(seg) = st.delete_dimension(idx) else {
+        let Some(dim) = st.delete_dimension(id) else {
             return;
         };
-        let len = st.format_len(seg.0.distance(&seg.1));
-        (seg, len)
+        let len = st.format_len(dim.length());
+        (dim, len)
     };
     tracing::info!("dimension deleted: {len}");
     let toast = adw::Toast::builder()
@@ -653,7 +739,7 @@ fn delete_hovered(cb: &Rc<PdfCanvas>, toasts: &adw::ToastOverlay) {
     let cb2 = cb.clone();
     let len2 = len.clone();
     toast.connect_button_clicked(move |_| {
-        cb2.state.borrow_mut().restore_dimension(seg);
+        cb2.state.borrow_mut().restore_dimension(dim);
         tracing::info!("dimension restored: {len2}");
         cb2.area.queue_draw();
     });

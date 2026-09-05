@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Vernier
-Comment=Measure and take off quantities from PDF drawings
+Comment=Measure PDF drawings with snapping
 Exec=vernier %U
 Icon=io.github.genneth.Vernier
 Terminal=false
@@ -8,3 +8,4 @@ Type=Application
 Categories=Graphics;Viewer;Engineering;
 Keywords=PDF;measure;takeoff;scale;drawing;plan;
 MimeType=application/pdf;
+StartupNotify=true

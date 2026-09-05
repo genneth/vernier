@@ -1,4 +1,4 @@
-# Rust (Cargo.lock IS committed for the binary app)
+# Rust (Cargo.lock IS committed: this is a binary application)
 /target/
 **/target/
 
@@ -10,7 +10,8 @@ __pycache__/
 *.swp
 .DS_Store
 
-# Local scratch space (throwaway spikes, logs, headless-verify screenshots)
+# Local scratch space: spikes, logs, screenshots, the Flathub staging clone,
+# fetched tools (see packaging/README.md). Never tracked.
 /scratch/
 
 # Machine-local agent instructions
@@ -20,6 +21,3 @@ CLAUDE.local.md
 /.flatpak-builder/
 /build-dir/
 /repo/
-
-# fetched on demand (see packaging/README.md)
-packaging/flatpak-cargo-generator.py

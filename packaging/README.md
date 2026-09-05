@@ -108,7 +108,10 @@ matches it.
    git push -u origin io.github.genneth.Vernier
    ```
 2. Open a pull request against **`new-pr`** (never `master`) titled
-   `Add io.github.genneth.Vernier`. Write the description yourself: Flathub
+   `Add io.github.genneth.Vernier`. The PR template asks for a short video of
+   the app running as the Flatpak on Linux; `scripts/record-flatpak-demo.sh`
+   produces one (WebM, well under GitHub's 10 MB limit) on the headless
+   compositor. Write the description yourself: Flathub
    requires that AI tools do not open or write submission PRs or replies, and
    that any AI-generated code or packaging is disclosed with its extent.
 3. Answer reviewer comments; when they are resolved comment `bot, build` for a

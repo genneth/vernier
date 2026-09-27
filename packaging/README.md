@@ -6,7 +6,7 @@ the icon, the vendored crate list and the screenshots.
 
 | File | Purpose |
 | --- | --- |
-| `io.github.genneth.Vernier.yml` | Flatpak manifest (GNOME 50 runtime, offline cargo build). Its git source is this working tree |
+| `io.github.genneth.Vernier.yml` | Flatpak manifest (GNOME 51 runtime, offline cargo build). Its git source is this working tree |
 | `io.github.genneth.Vernier.metainfo.xml` | AppStream metadata: description, screenshots, **release history** |
 | `io.github.genneth.Vernier.desktop` | Desktop entry |
 | `io.github.genneth.Vernier.svg` | Icon (a vernier caliper) |
@@ -20,8 +20,8 @@ The runtimes and the builder live in the **system** Flatpak installation; the
 app itself installs at **user** scope from a local repository. Once:
 
 ```sh
-sudo flatpak install flathub org.flatpak.Builder org.gnome.Platform//50 org.gnome.Sdk//50 \
-    org.freedesktop.Sdk.Extension.rust-stable//25.08 org.freedesktop.Sdk.Extension.llvm22//25.08
+sudo flatpak install flathub org.flatpak.Builder org.gnome.Platform//51 org.gnome.Sdk//51 \
+    org.freedesktop.Sdk.Extension.rust-stable//26.08 org.freedesktop.Sdk.Extension.llvm22//26.08
 ```
 
 Then, from the repository root, after committing (the manifest builds the
